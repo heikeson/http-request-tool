@@ -54,5 +54,3 @@ Please follow the existing code style in the project. This includes using consis
 ### Bug Reports and Feature Requests
 If you encounter a bug or have a feature request, please open an issue on the GitHub repository. Provide as much detail as possible, including steps to reproduce the bug or a clear description of the feature.
 
-## License
-This project is licensed under the [MIT License](https://opensource.org/licenses/MIT). See the `LICENSE` file in the repository for more details.
