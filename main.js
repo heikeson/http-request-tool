@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HTTP Request Tool
 // @namespace    https://github.com/heikeson/http-request-tool
-// @version      1.5
+// @version      2.0
 // @description  HTTP request tool with URL auto-detection, cookie management and beautiful UI
 // @author       heikeson
 // @match        *://*/*
@@ -13,1097 +13,1372 @@
 // @grant        GM_openInTab
 // ==/UserScript==
 
-
 (function() {
     'use strict';
-  
-    const style = `
-        #http-request-float-window {
-            position: fixed;
-            top: 50px;
-            right: 50px;
-            width: 520px;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
-            z-index: 9999;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            overflow: hidden;
-            transition: all 0.3s ease;
+
+    class HRTool {
+        constructor() {
+            this.state = {
+                url: window.location.href,
+                method: 'GET',
+                headers: [{ key: 'Content-Type', value: 'application/json' }],
+                cookies: [],
+                body: '{}',
+                useJsonForm: true,
+                sections: {
+                    form: false,
+                    headers: false,
+                    cookies: true,
+                    body: false,
+                    result: false,
+                    history: false
+                },
+                history: [],
+                historyLimit: GM_getValue('historyLimit', 20),
+                currentHistoryId: null
+            };
+
+            this.elements = {
+                floatWindow: null,
+                toggleBtn: null,
+                toast: null
+            };
+
+            this.init();
         }
 
-        #http-request-header {
-            padding: 12px 16px;
-            background: #f8f9fa;
-            border-bottom: 1px solid #e9ecef;
-            cursor: move;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            font-weight: 500;
-            color: #333;
+        init() {
+            this.loadSettings();
+            this.createToggleButton();
+            this.addEventListeners();
         }
 
-        #http-request-controls {
-            display: flex;
-            gap: 8px;
+        loadSettings() {
+            this.state.cookies = GM_getValue('cookies', []);
+            this.state.history = GM_getValue('history', []);
+            this.state.historyLimit = GM_getValue('historyLimit', 20);
         }
 
-        .http-request-btn {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            border: none;
-            cursor: pointer;
-            transition: all 0.2s ease;
+        saveSettings() {
+            GM_setValue('cookies', this.state.cookies);
+            GM_setValue('history', this.state.history);
+            GM_setValue('historyLimit', this.state.historyLimit);
         }
 
-        #http-request-minimize { background-color: #ffbd44; }
-        #http-request-close { background-color: #ff605c; }
-
-        #http-request-minimize:hover { background-color: #e5a73d; }
-        #http-request-close:hover { background-color: #e55652; }
-
-        #http-request-content {
-            padding: 16px;
-            max-height: 70vh;
-            overflow-y: auto;
-        }
-
-        .http-request-hidden {
-            display: none !important;
-        }
-
-        .http-request-section {
-            margin-bottom: 16px;
-        }
-
-        .http-request-section-header {
-            font-weight: 500;
-            margin-bottom: 8px;
-            color: #555;
-            display: flex;
-            align-items: center;
-            cursor: pointer;
-        }
-
-        .http-request-section-header:hover {
-            color: #333;
-        }
-
-        .http-request-section-content {
-            background: #f8f9fa;
-            padding: 12px;
-            border-radius: 4px;
-        }
-
-        .http-request-toggle-icon {
-            margin-right: 8px;
-            transition: transform 0.2s ease;
-        }
-
-        .http-request-section.collapsed .http-request-toggle-icon {
-            transform: rotate(-90deg);
-        }
-
-        .http-request-section.collapsed .http-request-section-content {
-            display: none;
-        }
-
-        #http-request-form {
-            display: grid;
-            gap: 12px;
-        }
-
-        #http-request-url {
-            width: 100%;
-            padding: 8px 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            box-sizing: border-box;
-            font-size: 14px;
-            transition: border-color 0.2s ease;
-        }
-
-        #http-request-url:focus {
-            outline: none;
-            border-color: #4a90e2;
-        }
-
-        #http-request-methods {
-            display: flex;
-            gap: 8px;
-        }
-
-        .http-request-method-btn {
-            padding: 6px 12px;
-            background: #f0f0f0;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-            transition: all 0.2s ease;
-        }
-
-        .http-request-method-btn.active {
-            background: #4a90e2;
-            color: white;
-        }
-
-        .http-request-method-btn:hover:not(.active) {
-            background: #e0e0e0;
-        }
-
-        .http-request-key-value-pair {
-            display: grid;
-            grid-template-columns: 1fr 3fr auto;
-            gap: 8px;
-            margin-bottom: 8px;
-        }
-
-        .http-request-key-value-pair input {
-            padding: 6px 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 13px;
-        }
-
-        .http-request-add-btn {
-            padding: 6px 12px;
-            background: #50e3c2;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 13px;
-            transition: all 0.2s ease;
-            display: inline-flex;
-            align-items: center;
-        }
-
-        .http-request-add-btn:hover {
-            background: #40c9ab;
-        }
-
-        .http-request-remove-btn {
-            padding: 6px 10px;
-            background: #ff6b6b;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-            transition: all 0.2s ease;
-        }
-
-        .http-request-remove-btn:hover {
-            background: #e55c5c;
-        }
-
-        #http-request-body-section {
-            display: none;
-        }
-
-        #http-request-body-editor {
-            display: grid;
-            gap: 10px;
-        }
-
-        .http-request-json-row {
-            display: grid;
-            grid-template-columns: 1fr 3fr 1fr auto;
-            gap: 8px;
-            margin-bottom: 8px;
-        }
-
-        .http-request-json-type {
-            padding: 6px 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 13px;
-        }
-
-        .http-request-json-value input,
-        .http-request-json-value textarea {
-            width: 100%;
-            padding: 6px 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 13px;
-            box-sizing: border-box;
-        }
-
-        .http-request-json-value textarea {
-            height: 60px;
-            resize: vertical;
-            font-family: monospace;
-        }
-
-        #http-request-json-mode-toggle {
-            margin-top: 8px;
-            text-align: right;
-        }
-
-        #http-request-json-mode-toggle button {
-            padding: 4px 8px;
-            background: #f0f0f0;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-            transition: all 0.2s ease;
-        }
-
-        #http-request-json-mode-toggle button:hover {
-            background: #e0e0e0;
-        }
-
-        #http-request-send {
-            padding: 10px 16px;
-            background: #4a90e2;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-            font-weight: 500;
-            transition: all 0.2s ease;
-            margin-top: 8px;
-        }
-
-        #http-request-send:hover {
-            background: #3a78c2;
-        }
-
-        #http-request-result {
-            margin-top: 16px;
-            padding: 12px;
-            background: #f8f9fa;
-            border-radius: 4px;
-            min-height: 100px;
-        }
-
-        #http-request-result-header {
-            font-weight: 500;
-            margin-bottom: 8px;
-            color: #555;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        #http-request-status-code {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-weight: 500;
-            margin-right: 8px;
-        }
-
-        .status-success { background-color: #e8f5e9; color: #2e7d32; }
-        .status-redirect { background-color: #e8eaf6; color: #1a237e; }
-        .status-client-error { background-color: #fff3e0; color: #f57c00; }
-        .status-server-error { background-color: #ffebee; color: #b71c1c; }
-
-        #http-request-result-body {
-            background: white;
-            padding: 10px;
-            border-radius: 4px;
-            border: 1px solid #eee;
-            min-height: 60px;
-            font-family: monospace;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            font-size: 14px;
-            overflow-x: auto;
-        }
-
-        #http-request-toggle-btn {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            padding: 10px 16px;
-            background: #4a90e2;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 500;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            z-index: 9999;
-            transition: all 0.2s ease;
-        }
-
-        #http-request-toggle-btn:hover {
-            background: #3a78c2;
-        }
-
-        .http-request-result-actions {
-            display: flex;
-            gap: 8px;
-        }
-
-        .http-request-result-btn {
-            padding: 4px 8px;
-            background: #f0f0f0;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-            transition: all 0.2s ease;
-            display: flex;
-            align-items: center;
-        }
-
-        .http-request-result-btn:hover {
-            background: #e0e0e0;
-        }
-
-        .http-request-toast {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            padding: 10px 16px;
-            background: #333;
-            color: white;
-            border-radius: 4px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            z-index: 10000;
-            opacity: 0;
-            transition: opacity 0.3s ease;
-        }
-
-        .http-request-toast.show {
-            opacity: 1;
-        }
-    `;
-    GM_addStyle(style);
-
-    const state = {
-        url: window.location.href,
-        method: 'GET',
-        headers: [
-            { key: 'Content-Type', value: 'application/json' }
-        ],
-        cookies: [],
-        body: '{}',
-        isMinimized: false,
-        isOpen: false,
-        useJsonForm: true,
-        sections: {
-            'form': false,
-            'headers': false,
-            'cookies': true,
-            'body': false,
-            'result': false
-        }
-    };
-
-    function initDefaultCookies() {
-        const storedCookies = GM_getValue('http-request-tool-cookies', []);
-        if (storedCookies.length > 0) {
-            state.cookies = storedCookies;
-        } else {
-            const documentCookies = document.cookie.split('; ');
-            state.cookies = documentCookies.map(cookie => {
-                const [key, value] = cookie.split('=');
-                return { key, value };
-            }).filter(c => c.key && c.value);
-        }
-    }
-
-    function createFloatWindow() {
-        const floatWindow = document.createElement('div');
-        floatWindow.id = 'http-request-float-window';
-
-        const header = document.createElement('div');
-        header.id = 'http-request-header';
-
-        const title = document.createElement('div');
-        title.textContent = 'HTTP Request Tool';
-
-        const controls = document.createElement('div');
-        controls.id = 'http-request-controls';
-
-        const minimizeBtn = document.createElement('button');
-        minimizeBtn.id = 'http-request-minimize';
-        minimizeBtn.addEventListener('click', toggleWindow);
-
-        const closeBtn = document.createElement('button');
-        closeBtn.id = 'http-request-close';
-        closeBtn.addEventListener('click', closeWindow);
-
-        controls.appendChild(minimizeBtn);
-        controls.appendChild(closeBtn);
-
-        header.appendChild(title);
-        header.appendChild(controls);
-
-        const content = document.createElement('div');
-        content.id = 'http-request-content';
-
-        const formSection = document.createElement('div');
-        formSection.className = 'http-request-section';
-
-        const formHeader = document.createElement('div');
-        formHeader.className = 'http-request-section-header';
-        formHeader.innerHTML = '<i class="fa fa-paper-plane http-request-toggle-icon"></i>Request';
-        formHeader.addEventListener('click', () => toggleSection('form'));
-
-        const formContent = document.createElement('div');
-        formContent.className = 'http-request-section-content';
-
-        const form = document.createElement('div');
-        form.id = 'http-request-form';
-
-        const urlInput = document.createElement('input');
-        urlInput.id = 'http-request-url';
-        urlInput.type = 'text';
-        urlInput.value = state.url;
-
-        const methodsDiv = document.createElement('div');
-        methodsDiv.id = 'http-request-methods';
-
-        ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].forEach(method => {
+        createToggleButton() {
             const btn = document.createElement('button');
-            btn.className = `http-request-method-btn ${method === state.method ? 'active' : ''}`;
-            btn.textContent = method;
-            btn.dataset.method = method;
-            btn.addEventListener('click', () => selectMethod(method));
-            methodsDiv.appendChild(btn);
-        });
+            btn.id = 'hrt-toggle-btn';
+            btn.innerHTML = '<i class="fa fa-bars"></i> HRT';
+            btn.style.cssText = `
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                width: 48px;
+                height: 48px;
+                background: #4a90e2;
+                color: white;
+                border: none;
+                border-radius: 50%;
+                cursor: pointer;
+                font-size: 12px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                z-index: 9999;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                flex-direction: column;
+                transition: all 0.2s ease;
+            `;
 
-        const bodySection = document.createElement('div');
-        bodySection.id = 'http-request-body-section';
-
-        const bodyHeader = document.createElement('div');
-        bodyHeader.className = 'http-request-section-header';
-        bodyHeader.innerHTML = '<i class="fa fa-code http-request-toggle-icon"></i>Request Body (JSON)';
-        bodyHeader.addEventListener('click', () => toggleSection('body'));
-
-        const bodyContent = document.createElement('div');
-        bodyContent.className = 'http-request-section-content';
-
-        const bodyEditor = document.createElement('div');
-        bodyEditor.id = 'http-request-body-editor';
-
-        const jsonForm = document.createElement('div');
-        jsonForm.id = 'http-request-json-form';
-
-        try {
-            const jsonData = JSON.parse(state.body);
-            Object.keys(jsonData).forEach(key => {
-                const value = jsonData[key];
-                const type = typeof value;
-                addJsonRow(jsonForm, key, value, type);
+            btn.addEventListener('click', () => {
+                btn.remove();
+                this.createFloatWindow();
             });
-        } catch (e) {
-            addJsonRow(jsonForm, 'key', 'value', 'string');
+
+            document.body.appendChild(btn);
+            this.elements.toggleBtn = btn;
+            this.makeDraggable(btn, btn);
         }
 
-        const addJsonBtn = document.createElement('button');
-        addJsonBtn.className = 'http-request-add-btn';
-        addJsonBtn.innerHTML = '<i class="fa fa-plus"></i> Add Field';
-        addJsonBtn.addEventListener('click', () => addJsonRow(jsonForm, '', '', 'string'));
+        createFloatWindow() {
+            const floatWindow = document.createElement('div');
+            floatWindow.id = 'hrt-float-window';
+            floatWindow.style.cssText = `
+                position: fixed;
+                top: 50px;
+                right: 50px;
+                width: 520px;
+                background: white;
+                border-radius: 8px;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+                z-index: 9999;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                overflow: hidden;
+                transition: all 0.3s ease;
+            `;
 
-        const jsonModeToggle = document.createElement('div');
-        jsonModeToggle.id = 'http-request-json-mode-toggle';
+            const header = this.createHeader();
 
-        const toggleBtn = document.createElement('button');
-        toggleBtn.textContent = 'Switch to Raw JSON';
-        toggleBtn.addEventListener('click', toggleJsonMode);
+            const content = document.createElement('div');
+            content.id = 'hrt-content';
+            content.style.padding = '16px';
+            content.style.maxHeight = '70vh';
+            content.style.overflowY = 'auto';
 
-        jsonModeToggle.appendChild(toggleBtn);
+            content.appendChild(this.createFormSection());
+            content.appendChild(this.createHeadersSection());
+            content.appendChild(this.createCookiesSection());
+            content.appendChild(this.createResultSection());
+            content.appendChild(this.createHistorySection());
 
-        const rawJsonTextarea = document.createElement('textarea');
-        rawJsonTextarea.id = 'http-request-body';
-        rawJsonTextarea.value = state.body;
-        rawJsonTextarea.className = 'http-request-hidden';
+            floatWindow.appendChild(header);
+            floatWindow.appendChild(content);
+            document.body.appendChild(floatWindow);
 
-        bodyEditor.appendChild(jsonForm);
-        bodyEditor.appendChild(addJsonBtn);
-        bodyEditor.appendChild(jsonModeToggle);
-        bodyEditor.appendChild(rawJsonTextarea);
-
-        bodyContent.appendChild(bodyEditor);
-        bodySection.appendChild(bodyHeader);
-        bodySection.appendChild(bodyContent);
-
-        const sendBtn = document.createElement('button');
-        sendBtn.id = 'http-request-send';
-        sendBtn.textContent = 'Send Request';
-        sendBtn.addEventListener('click', sendRequest);
-
-        form.appendChild(urlInput);
-        form.appendChild(methodsDiv);
-        form.appendChild(bodySection);
-        form.appendChild(sendBtn);
-
-        formContent.appendChild(form);
-        formSection.appendChild(formHeader);
-        formSection.appendChild(formContent);
-
-        const headersSection = createKeyValueSection('Headers', 'http-request-headers', state.headers, 'headers');
-
-        const cookiesSection = createKeyValueSection('Cookies', 'http-request-cookies', state.cookies, 'cookies');
-
-        const resultSection = document.createElement('div');
-        resultSection.className = 'http-request-section';
-
-        const resultHeader = document.createElement('div');
-        resultHeader.className = 'http-request-section-header';
-        resultHeader.innerHTML = '<i class="fa fa-reply http-request-toggle-icon"></i>Response';
-        resultHeader.addEventListener('click', () => toggleSection('result'));
-
-        const resultContent = document.createElement('div');
-        resultContent.className = 'http-request-section-content';
-
-        const resultContainer = document.createElement('div');
-        resultContainer.id = 'http-request-result';
-
-        const resultStatus = document.createElement('div');
-        resultStatus.id = 'http-request-result-header';
-        resultStatus.innerHTML = `
-            <span id="http-request-status-code"></span>
-            <span id="http-request-status-text"></span>
-            <div class="http-request-result-actions">
-                <button id="http-request-copy-btn" class="http-request-result-btn">
-                    <i class="fa fa-copy"></i> Copy
-                </button>
-                <button id="http-request-open-html-btn" class="http-request-result-btn http-request-hidden">
-                    <i class="fa fa-external-link"></i> Open HTML
-                </button>
-            </div>
-        `;
-
-        const resultBody = document.createElement('div');
-        resultBody.id = 'http-request-result-body';
-        resultBody.textContent = 'Ready to send request...';
-
-        document.addEventListener('click', function(e) {
-            if (e.target.id === 'http-request-copy-btn') {
-                copyResponseToClipboard();
-            } else if (e.target.id === 'http-request-open-html-btn') {
-                openHtmlResponse();
-            }
-        });
-
-        resultContainer.appendChild(resultStatus);
-        resultContainer.appendChild(resultBody);
-        resultContent.appendChild(resultContainer);
-
-        resultSection.appendChild(resultHeader);
-        resultSection.appendChild(resultContent);
-
-        content.appendChild(formSection);
-        content.appendChild(headersSection);
-        content.appendChild(cookiesSection);
-        content.appendChild(resultSection);
-
-        floatWindow.appendChild(header);
-        floatWindow.appendChild(content);
-
-        document.body.appendChild(floatWindow);
-
-        makeDraggable(floatWindow, header);
-
-        addToastNotification();
-
-        updateUI();
-
-        return floatWindow;
-    }
-
-    function addToastNotification() {
-        const toast = document.createElement('div');
-        toast.id = 'http-request-toast';
-        toast.className = 'http-request-toast';
-        document.body.appendChild(toast);
-    }
-
-    function showToast(message, duration = 2000) {
-        const toast = document.getElementById('http-request-toast');
-        if (!toast) return;
-
-        toast.textContent = message;
-        toast.classList.add('show');
-
-        setTimeout(() => {
-            toast.classList.remove('show');
-        }, duration);
-    }
-
-    function createKeyValueSection(title, id, items, sectionKey) {
-        const section = document.createElement('div');
-        section.className = `http-request-section ${state.sections[sectionKey] ? 'collapsed' : ''}`;
-        section.dataset.section = sectionKey;
-
-        const header = document.createElement('div');
-        header.className = 'http-request-section-header';
-        header.innerHTML = `<i class="fa fa-chevron-right http-request-toggle-icon"></i>${title}`;
-        header.addEventListener('click', () => toggleSection(sectionKey));
-
-        const content = document.createElement('div');
-        content.className = 'http-request-section-content';
-
-        const container = document.createElement('div');
-        container.id = id;
-
-        items.forEach((item, index) => {
-            addKeyValueRow(container, item.key, item.value, index);
-        });
-
-        const addBtn = document.createElement('button');
-        addBtn.className = 'http-request-add-btn';
-        addBtn.innerHTML = '<i class="fa fa-plus"></i> Add';
-        addBtn.addEventListener('click', () => addKeyValueRow(container, '', '', null));
-
-        content.appendChild(container);
-        content.appendChild(addBtn);
-
-        section.appendChild(header);
-        section.appendChild(content);
-
-        return section;
-    }
-
-    function addKeyValueRow(container, key, value, index = null) {
-        const row = document.createElement('div');
-        row.className = 'http-request-key-value-pair';
-
-        const keyInput = document.createElement('input');
-        keyInput.type = 'text';
-        keyInput.placeholder = 'Key';
-        keyInput.value = key;
-
-        const valueInput = document.createElement('input');
-        valueInput.type = 'text';
-        valueInput.placeholder = 'Value';
-        valueInput.value = value;
-
-        const removeBtn = document.createElement('button');
-        removeBtn.className = 'http-request-remove-btn';
-        removeBtn.innerHTML = '<i class="fa fa-times"></i>';
-        removeBtn.addEventListener('click', () => row.remove());
-
-        row.appendChild(keyInput);
-        row.appendChild(valueInput);
-        row.appendChild(removeBtn);
-
-        if (index !== null && container.children.length > index) {
-            container.insertBefore(row, container.children[index]);
-        } else {
-            container.appendChild(row);
+            this.elements.floatWindow = floatWindow;
+            this.makeDraggable(floatWindow, header);
         }
-    }
 
-    function addJsonRow(container, key, value, type) {
-        const row = document.createElement('div');
-        row.className = 'http-request-json-row';
+        createHeader() {
+            const header = document.createElement('div');
+            header.style.cssText = `
+                padding: 12px 16px;
+                background: #f8f9fa;
+                border-bottom: 1px solid #e9ecef;
+                cursor: move;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                font-weight: 500;
+                color: #333;
+            `;
 
-        const keyInput = document.createElement('input');
-        keyInput.type = 'text';
-        keyInput.placeholder = 'Key';
-        keyInput.value = key;
+            const title = document.createElement('div');
+            title.textContent = 'HTTP Request Tool (HRT)';
 
-        const typeSelect = document.createElement('select');
-        typeSelect.className = 'http-request-json-type';
+            const closeBtn = document.createElement('button');
+            closeBtn.id = 'hrt-close-btn';
+            closeBtn.innerHTML = '<i class="fa fa-times"></i>';
+            closeBtn.style.cssText = `
+                width: 24px;
+                height: 24px;
+                border-radius: 50%;
+                border: none;
+                cursor: pointer;
+                background: #ff605c;
+                color: white;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                transition: all 0.2s ease;
+            `;
 
-        ['string', 'number', 'boolean', 'object', 'array', 'null'].forEach(t => {
-            const option = document.createElement('option');
-            option.value = t;
-            option.textContent = t;
-            option.selected = t === type;
-            typeSelect.appendChild(option);
-        });
+            closeBtn.addEventListener('click', () => {
+                this.elements.floatWindow.remove();
+                this.createToggleButton();
+            });
 
-        const valueContainer = document.createElement('div');
-        valueContainer.className = 'http-request-json-value';
+            header.appendChild(title);
+            header.appendChild(closeBtn);
+            return header;
+        }
 
-        let valueInput;
-        if (type === 'string') {
-            valueInput = document.createElement('input');
-            valueInput.type = 'text';
-            valueInput.value = value;
-        } else if (type === 'object' || type === 'array') {
-            valueInput = document.createElement('textarea');
+        createFormSection() {
+            const section = document.createElement('div');
+            section.className = 'hrt-section';
+            section.dataset.section = 'form';
+
+            const header = document.createElement('div');
+            header.className = 'hrt-section-header';
+            header.innerHTML = '<i class="fa fa-paper-plane hrt-toggle-icon"></i>Request';
+            header.style.cssText = `
+                font-weight: 500;
+                margin-bottom: 8px;
+                color: #555;
+                display: flex;
+                align-items: center;
+                cursor: pointer;
+            `;
+
+            header.addEventListener('click', () => {
+                this.state.sections.form = !this.state.sections.form;
+                this.updateSectionVisibility('form', section);
+            });
+
+            const content = document.createElement('div');
+            content.className = 'hrt-section-content';
+            content.style.cssText = `
+                background: #f8f9fa;
+                padding: 12px;
+                border-radius: 4px;
+                display: ${this.state.sections.form ? 'none' : 'block'};
+            `;
+
+            const form = document.createElement('div');
+            form.id = 'hrt-form';
+            form.style.display = 'grid';
+            form.style.gap = '12px';
+
+            const urlInput = document.createElement('input');
+            urlInput.id = 'hrt-url';
+            urlInput.type = 'text';
+            urlInput.value = this.state.url;
+            urlInput.placeholder = 'https://api.example.com';
+            urlInput.style.cssText = `
+                width: 100%;
+                padding: 8px 10px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                box-sizing: border-box;
+                font-size: 14px;
+                transition: border-color 0.2s ease;
+            `;
+
+            const methodsDiv = document.createElement('div');
+            methodsDiv.id = 'hrt-methods';
+            methodsDiv.style.display = 'flex';
+            methodsDiv.style.gap = '8px';
+
+            ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].forEach(method => {
+                const btn = document.createElement('button');
+                btn.className = `hrt-method-btn ${method === this.state.method ? 'active' : ''}`;
+                btn.textContent = method;
+                btn.dataset.method = method;
+                btn.style.cssText = `
+                    padding: 6px 12px;
+                    background: #f0f0f0;
+                    border: none;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    font-size: 14px;
+                    transition: all 0.2s ease;
+                `;
+
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.hrt-method-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    this.state.method = method;
+
+                    const bodySection = document.getElementById('hrt-body-section');
+                    bodySection.style.display = method === 'POST' || method === 'PUT' || method === 'PATCH' ? 'block' : 'none';
+                });
+
+                methodsDiv.appendChild(btn);
+            });
+
+            const bodySection = document.createElement('div');
+            bodySection.id = 'hrt-body-section';
+            bodySection.style.cssText = `
+                margin-bottom: 12px;
+                display: ${this.state.method === 'POST' || this.state.method === 'PUT' || this.state.method === 'PATCH' ? 'block' : 'none'};
+            `;
+
+            const bodyHeader = document.createElement('div');
+            bodyHeader.className = 'hrt-section-header';
+            bodyHeader.innerHTML = '<i class="fa fa-code hrt-toggle-icon"></i>Request Body (JSON)';
+            bodyHeader.style.marginBottom = '8px';
+
+            const bodyContent = document.createElement('div');
+            bodyContent.style.cssText = `
+                background: #f8f9fa;
+                padding: 12px;
+                border-radius: 4px;
+            `;
+
+            const bodyEditor = document.createElement('div');
+            bodyEditor.id = 'hrt-body-editor';
+            bodyEditor.style.display = 'grid';
+            bodyEditor.style.gap = '10px';
+
+            const jsonForm = document.createElement('div');
+            jsonForm.id = 'hrt-json-form';
+
             try {
-                valueInput.value = JSON.stringify(value, null, 2);
-            } catch (e) {
-                valueInput.value = value;
-            }
-        } else {
-            valueInput = document.createElement('input');
-            valueInput.type = 'text';
-            valueInput.value = value;
-        }
-
-        valueInput.placeholder = 'Value';
-        valueContainer.appendChild(valueInput);
-
-        const removeBtn = document.createElement('button');
-        removeBtn.className = 'http-request-remove-btn';
-        removeBtn.innerHTML = '<i class="fa fa-times"></i>';
-        removeBtn.addEventListener('click', () => row.remove());
-
-        row.appendChild(keyInput);
-        row.appendChild(typeSelect);
-        row.appendChild(valueContainer);
-        row.appendChild(removeBtn);
-
-        typeSelect.addEventListener('change', () => {
-            const newType = typeSelect.value;
-            valueContainer.innerHTML = '';
-
-            let newValueInput;
-            if (newType === 'string') {
-                newValueInput = document.createElement('input');
-                newValueInput.type = 'text';
-            } else if (newType === 'object' || newType === 'array') {
-                newValueInput = document.createElement('textarea');
-            } else {
-                newValueInput = document.createElement('input');
-                newValueInput.type = 'text';
-            }
-
-            newValueInput.placeholder = 'Value';
-            valueContainer.appendChild(newValueInput);
-        });
-
-        container.appendChild(row);
-    }
-
-    function selectMethod(method) {
-        state.method = method;
-
-        document.querySelectorAll('.http-request-method-btn').forEach(btn => {
-            if (btn.dataset.method === method) {
-                btn.classList.add('active');
-            } else {
-                btn.classList.remove('active');
-            }
-        });
-
-        const bodySection = document.getElementById('http-request-body-section');
-        if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
-            bodySection.style.display = 'block';
-        } else {
-            bodySection.style.display = 'none';
-        }
-    }
-
-    function toggleJsonMode() {
-        state.useJsonForm = !state.useJsonForm;
-
-        const jsonForm = document.getElementById('http-request-json-form');
-        const rawJson = document.getElementById('http-request-body');
-        const toggleBtn = document.querySelector('#http-request-json-mode-toggle button');
-
-        if (state.useJsonForm) {
-            try {
-                const jsonData = JSON.parse(rawJson.value);
-                jsonForm.innerHTML = '';
+                const jsonData = JSON.parse(this.state.body);
                 Object.keys(jsonData).forEach(key => {
                     const value = jsonData[key];
                     const type = typeof value;
-                    addJsonRow(jsonForm, key, value, type);
+                    this.addJsonRow(jsonForm, key, value, type);
                 });
             } catch (e) {
-                alert('Invalid JSON format');
-                state.useJsonForm = true;
+                this.addJsonRow(jsonForm, 'key', 'value', 'string');
+            }
+
+            const addJsonBtn = document.createElement('button');
+            addJsonBtn.id = 'hrt-add-json-btn';
+            addJsonBtn.innerHTML = '<i class="fa fa-plus"></i> Add Field';
+            addJsonBtn.style.cssText = `
+                padding: 6px 12px;
+                background: #50e3c2;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 13px;
+                transition: all 0.2s ease;
+            `;
+
+            addJsonBtn.addEventListener('click', () => this.addJsonRow(jsonForm, '', '', 'string'));
+
+            const jsonModeToggle = document.createElement('div');
+            jsonModeToggle.id = 'hrt-json-mode-toggle';
+            jsonModeToggle.style.cssText = `
+                margin-top: 8px;
+                text-align: right;
+            `;
+
+            const toggleBtn = document.createElement('button');
+            toggleBtn.textContent = 'Switch to Raw JSON';
+            toggleBtn.style.cssText = `
+                padding: 4px 8px;
+                background: #f0f0f0;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 12px;
+                transition: all 0.2s ease;
+            `;
+
+            toggleBtn.addEventListener('click', () => {
+                this.state.useJsonForm = !this.state.useJsonForm;
+                const jsonForm = document.getElementById('hrt-json-form');
+                const rawJson = document.getElementById('hrt-raw-json');
+
+                if (this.state.useJsonForm) {
+                    try {
+                        const jsonData = this.collectJsonData();
+                        rawJson.value = JSON.stringify(jsonData, null, 2);
+                    } catch (e) {
+                        alert('Invalid JSON format');
+                        return;
+                    }
+
+                    jsonForm.classList.add('hrt-hidden');
+                    rawJson.classList.remove('hrt-hidden');
+                    toggleBtn.textContent = 'Switch to Form';
+                } else {
+                    try {
+                        const jsonData = JSON.parse(rawJson.value);
+                        jsonForm.innerHTML = '';
+                        Object.keys(jsonData).forEach(key => {
+                            const value = jsonData[key];
+                            const type = typeof value;
+                            this.addJsonRow(jsonForm, key, value, type);
+                        });
+                    } catch (e) {
+                        alert('Invalid JSON format');
+                        this.state.useJsonForm = true;
+                        return;
+                    }
+
+                    jsonForm.classList.remove('hrt-hidden');
+                    rawJson.classList.add('hrt-hidden');
+                    toggleBtn.textContent = 'Switch to Raw JSON';
+                }
+            });
+
+            jsonModeToggle.appendChild(toggleBtn);
+
+            const rawJson = document.createElement('textarea');
+            rawJson.id = 'hrt-raw-json';
+            rawJson.value = this.state.body;
+            rawJson.style.cssText = `
+                width: 100%;
+                height: 120px;
+                padding: 8px 10px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                box-sizing: border-box;
+                font-family: monospace;
+                font-size: 14px;
+                resize: vertical;
+                ${this.state.useJsonForm ? 'display: none;' : ''}
+            `;
+
+            bodyEditor.appendChild(jsonForm);
+            bodyEditor.appendChild(addJsonBtn);
+            bodyEditor.appendChild(jsonModeToggle);
+            bodyEditor.appendChild(rawJson);
+
+            bodyContent.appendChild(bodyEditor);
+            bodySection.appendChild(bodyHeader);
+            bodySection.appendChild(bodyContent);
+
+            const sendBtn = document.createElement('button');
+            sendBtn.id = 'hrt-send-btn';
+            sendBtn.textContent = 'Send Request';
+            sendBtn.style.cssText = `
+                padding: 10px 16px;
+                background: #4a90e2;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 16px;
+                font-weight: 500;
+                transition: all 0.2s ease;
+                margin-top: 8px;
+            `;
+
+            sendBtn.addEventListener('click', () => this.sendRequest());
+
+            form.appendChild(urlInput);
+            form.appendChild(methodsDiv);
+            form.appendChild(bodySection);
+            form.appendChild(sendBtn);
+
+            content.appendChild(form);
+            section.appendChild(header);
+            section.appendChild(content);
+            return section;
+        }
+
+        addJsonRow(container, key, value, type) {
+            const row = document.createElement('div');
+            row.className = 'hrt-json-row';
+            row.style.display = 'grid';
+            row.style.gridTemplateColumns = '1fr 3fr 1fr auto';
+            row.style.gap = '8px';
+            row.style.marginBottom = '8px';
+
+            const keyInput = document.createElement('input');
+            keyInput.type = 'text';
+            keyInput.placeholder = 'Key';
+            keyInput.value = key;
+            keyInput.style.cssText = `
+                padding: 6px 8px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 13px;
+            `;
+
+            const typeSelect = document.createElement('select');
+            typeSelect.className = 'hrt-json-type';
+            typeSelect.style.cssText = `
+                padding: 6px 8px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 13px;
+            `;
+
+            ['string', 'number', 'boolean', 'object', 'array', 'null'].forEach(t => {
+                const option = document.createElement('option');
+                option.value = t;
+                option.textContent = t;
+                option.selected = t === type;
+                typeSelect.appendChild(option);
+            });
+
+            const valueContainer = document.createElement('div');
+            valueContainer.className = 'hrt-json-value';
+
+            let valueInput;
+            if (type === 'string' || type === 'number') {
+                valueInput = document.createElement('input');
+                valueInput.type = 'text';
+                valueInput.value = value;
+            } else if (type === 'boolean') {
+                valueInput = document.createElement('select');
+                valueInput.innerHTML = `
+                    <option value="true" ${value === true ? 'selected' : ''}>true</option>
+                    <option value="false" ${value === false ? 'selected' : ''}>false</option>
+                `;
+            } else if (type === 'object' || type === 'array') {
+                valueInput = document.createElement('textarea');
+                try {
+                    valueInput.value = JSON.stringify(value, null, 2);
+                } catch (e) {
+                    valueInput.value = value;
+                }
+                valueInput.style.height = '60px';
+            } else if (type === 'null') {
+                valueInput = document.createElement('select');
+                valueInput.innerHTML = '<option value="null" selected>null</option>';
+            }
+
+            valueInput.style.cssText = `
+                width: 100%;
+                padding: 6px 8px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 13px;
+                box-sizing: border-box;
+                ${type === 'object' || type === 'array' ? 'font-family: monospace;' : ''}
+            `;
+
+            valueContainer.appendChild(valueInput);
+
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'hrt-remove-btn';
+            removeBtn.innerHTML = '<i class="fa fa-times"></i>';
+            removeBtn.style.cssText = `
+                padding: 6px 10px;
+                background: #ff6b6b;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 12px;
+                transition: all 0.2s ease;
+            `;
+
+            removeBtn.addEventListener('click', () => row.remove());
+
+            row.appendChild(keyInput);
+            row.appendChild(typeSelect);
+            row.appendChild(valueContainer);
+            row.appendChild(removeBtn);
+            container.appendChild(row);
+
+            typeSelect.addEventListener('change', () => {
+                const newType = typeSelect.value;
+                valueContainer.innerHTML = '';
+
+                let newValueInput;
+                if (newType === 'string' || newType === 'number') {
+                    newValueInput = document.createElement('input');
+                    newValueInput.type = 'text';
+                } else if (newType === 'boolean') {
+                    newValueInput = document.createElement('select');
+                    newValueInput.innerHTML = `
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                    `;
+                } else if (newType === 'object' || newType === 'array') {
+                    newValueInput = document.createElement('textarea');
+                    newValueInput.style.height = '60px';
+                } else if (newType === 'null') {
+                    newValueInput = document.createElement('select');
+                    newValueInput.innerHTML = '<option value="null" selected>null</option>';
+                }
+
+                newValueInput.style.cssText = `
+                    width: 100%;
+                    padding: 6px 8px;
+                    border: 1px solid #ddd;
+                    border-radius: 4px;
+                    font-size: 13px;
+                    box-sizing: border-box;
+                    ${newType === 'object' || newType === 'array' ? 'font-family: monospace;' : ''}
+                `;
+
+                valueContainer.appendChild(newValueInput);
+            });
+        }
+
+        createHeadersSection() {
+            const section = document.createElement('div');
+            section.className = 'hrt-section';
+            section.dataset.section = 'headers';
+
+            const header = document.createElement('div');
+            header.className = 'hrt-section-header';
+            header.innerHTML = '<i class="fa fa-header hrt-toggle-icon"></i>Headers';
+            header.style.cssText = `
+                font-weight: 500;
+                margin-bottom: 8px;
+                color: #555;
+                display: flex;
+                align-items: center;
+                cursor: pointer;
+            `;
+
+            header.addEventListener('click', () => {
+                this.state.sections.headers = !this.state.sections.headers;
+                this.updateSectionVisibility('headers', section);
+            });
+
+            const content = document.createElement('div');
+            content.className = 'hrt-section-content';
+            content.style.cssText = `
+                background: #f8f9fa;
+                padding: 12px;
+                border-radius: 4px;
+                display: ${this.state.sections.headers ? 'none' : 'block'};
+            `;
+
+            const container = document.createElement('div');
+            container.id = 'hrt-headers-container';
+
+            this.state.headers.forEach((header, index) => {
+                this.addKeyValueRow(container, header.key, header.value, index);
+            });
+
+            const addBtn = document.createElement('button');
+            addBtn.id = 'hrt-add-header-btn';
+            addBtn.innerHTML = '<i class="fa fa-plus"></i> Add';
+            addBtn.style.cssText = `
+                padding: 6px 12px;
+                background: #50e3c2;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 13px;
+                transition: all 0.2s ease;
+            `;
+
+            addBtn.addEventListener('click', () => this.addKeyValueRow(container, '', ''));
+
+            content.appendChild(container);
+            content.appendChild(addBtn);
+            section.appendChild(header);
+            section.appendChild(content);
+            return section;
+        }
+
+        createCookiesSection() {
+            const section = document.createElement('div');
+            section.className = 'hrt-section';
+            section.dataset.section = 'cookies';
+
+            const header = document.createElement('div');
+            header.className = 'hrt-section-header';
+            header.innerHTML = '<i class="fa fa-cookie hrt-toggle-icon"></i>Cookies';
+            header.style.cssText = `
+                font-weight: 500;
+                margin-bottom: 8px;
+                color: #555;
+                display: flex;
+                align-items: center;
+                cursor: pointer;
+            `;
+
+            header.addEventListener('click', () => {
+                this.state.sections.cookies = !this.state.sections.cookies;
+                this.updateSectionVisibility('cookies', section);
+            });
+
+            const content = document.createElement('div');
+            content.className = 'hrt-section-content';
+            content.style.cssText = `
+                background: #f8f9fa;
+                padding: 12px;
+                border-radius: 4px;
+                display: ${this.state.sections.cookies ? 'none' : 'block'};
+            `;
+
+            const container = document.createElement('div');
+            container.id = 'hrt-cookies-container';
+
+            this.state.cookies.forEach((cookie, index) => {
+                this.addKeyValueRow(container, cookie.key, cookie.value, index);
+            });
+
+            const addBtn = document.createElement('button');
+            addBtn.id = 'hrt-add-cookie-btn';
+            addBtn.innerHTML = '<i class="fa fa-plus"></i> Add';
+            addBtn.style.cssText = `
+                padding: 6px 12px;
+                background: #50e3c2;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 13px;
+                transition: all 0.2s ease;
+            `;
+
+            addBtn.addEventListener('click', () => this.addKeyValueRow(container, '', ''));
+
+            content.appendChild(container);
+            content.appendChild(addBtn);
+            section.appendChild(header);
+            section.appendChild(content);
+            return section;
+        }
+
+        createResultSection() {
+            const section = document.createElement('div');
+            section.className = 'hrt-section';
+            section.dataset.section = 'result';
+
+            const header = document.createElement('div');
+            header.className = 'hrt-section-header';
+            header.innerHTML = '<i class="fa fa-reply hrt-toggle-icon"></i>Response';
+            header.style.cssText = `
+                font-weight: 500;
+                margin-bottom: 8px;
+                color: #555;
+                display: flex;
+                align-items: center;
+                cursor: pointer;
+            `;
+
+            header.addEventListener('click', () => {
+                this.state.sections.result = !this.state.sections.result;
+                this.updateSectionVisibility('result', section);
+            });
+
+            const content = document.createElement('div');
+            content.className = 'hrt-section-content';
+            content.style.cssText = `
+                background: #f8f9fa;
+                padding: 12px;
+                border-radius: 4px;
+                display: ${this.state.sections.result ? 'none' : 'block'};
+            `;
+
+            const resultContainer = document.createElement('div');
+            resultContainer.id = 'hrt-result-container';
+            resultContainer.style.cssText = `
+                background: white;
+                padding: 10px;
+                border-radius: 4px;
+                border: 1px solid #eee;
+                min-height: 60px;
+                font-family: monospace;
+                white-space: pre-wrap;
+                word-wrap: break-word;
+                font-size: 14px;
+                overflow-x: auto;
+            `;
+
+            const resultHeader = document.createElement('div');
+            resultHeader.style.cssText = `
+                font-weight: 500;
+                margin-bottom: 8px;
+                color: #555;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            `;
+
+            const statusCode = document.createElement('span');
+            statusCode.id = 'hrt-status-code';
+            statusCode.style.cssText = `
+                display: inline-block;
+                padding: 2px 8px;
+                border-radius: 4px;
+                font-weight: 500;
+                margin-right: 8px;
+            `;
+
+            const statusText = document.createElement('span');
+            statusText.id = 'hrt-status-text';
+            statusText.textContent = 'Ready to send request...';
+
+            const actions = document.createElement('div');
+            actions.className = 'hrt-result-actions';
+            actions.style.display = 'flex';
+            actions.style.gap = '8px';
+
+            const copyBtn = document.createElement('button');
+            copyBtn.id = 'hrt-copy-btn';
+            copyBtn.innerHTML = '<i class="fa fa-copy"></i> Copy';
+            copyBtn.style.cssText = `
+                padding: 4px 8px;
+                background: #f0f0f0;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 12px;
+                transition: all 0.2s ease;
+            `;
+
+            const openBtn = document.createElement('button');
+            openBtn.id = 'hrt-open-btn';
+            openBtn.innerHTML = '<i class="fa fa-external-link"></i> Open in New Tab';
+            openBtn.style.cssText = `
+                padding: 4px 8px;
+                background: #f0f0f0;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 12px;
+                transition: all 0.2s ease;
+            `;
+
+            actions.appendChild(copyBtn);
+            actions.appendChild(openBtn);
+
+            resultHeader.appendChild(statusCode);
+            resultHeader.appendChild(statusText);
+            resultHeader.appendChild(actions);
+
+            const resultBody = document.createElement('div');
+            resultBody.id = 'hrt-result-body';
+            resultBody.textContent = 'Ready to send request...';
+
+            resultContainer.appendChild(resultHeader);
+            resultContainer.appendChild(resultBody);
+
+            copyBtn.addEventListener('click', () => this.copyResponseToClipboard(resultBody.textContent));
+            openBtn.addEventListener('click', () => this.openResponseInNewTab(resultBody.textContent));
+
+            content.appendChild(resultContainer);
+            section.appendChild(header);
+            section.appendChild(content);
+            return section;
+        }
+
+        createHistorySection() {
+            const section = document.createElement('div');
+            section.className = 'hrt-section';
+            section.dataset.section = 'history';
+
+            const header = document.createElement('div');
+            header.className = 'hrt-section-header';
+            header.innerHTML = '<i class="fa fa-history hrt-toggle-icon"></i>History';
+            header.style.cssText = `
+                font-weight: 500;
+                margin-bottom: 8px;
+                color: #555;
+                display: flex;
+                align-items: center;
+                cursor: pointer;
+            `;
+
+            header.addEventListener('click', () => {
+                this.state.sections.history = !this.state.sections.history;
+                this.updateSectionVisibility('history', section);
+            });
+
+            const content = document.createElement('div');
+            content.className = 'hrt-section-content';
+            content.style.cssText = `
+                background: #f8f9fa;
+                padding: 12px;
+                border-radius: 4px;
+                display: ${this.state.sections.history ? 'none' : 'block'};
+            `;
+
+            const controls = document.createElement('div');
+            controls.id = 'hrt-history-controls';
+            controls.style.display = 'flex';
+            controls.style.justifyContent = 'space-between';
+            controls.style.alignItems = 'center';
+            controls.style.marginBottom = '8px';
+
+            const limitLabel = document.createElement('label');
+            limitLabel.textContent = 'Max history items: ';
+
+            const limitInput = document.createElement('input');
+            limitInput.id = 'hrt-history-limit';
+            limitInput.type = 'number';
+            limitInput.min = '1';
+            limitInput.max = '100';
+            limitInput.value = this.state.historyLimit;
+            limitInput.style.cssText = `
+                padding: 4px 8px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 12px;
+            `;
+
+            limitInput.addEventListener('change', (e) => {
+                const limit = parseInt(e.target.value);
+                if (!isNaN(limit) && limit >= 1 && limit <= 100) {
+                    this.state.historyLimit = limit;
+                    this.saveSettings();
+                    this.renderHistory(content);
+                }
+            });
+
+            controls.appendChild(limitLabel);
+            controls.appendChild(limitInput);
+
+            const historyList = document.createElement('div');
+            historyList.id = 'hrt-history-list';
+            historyList.style.cssText = `
+                max-height: 200px;
+                overflow-y: auto;
+                margin-top: 8px;
+                border: 1px solid #eee;
+                border-radius: 4px;
+            `;
+
+            this.renderHistory(historyList);
+
+            content.appendChild(controls);
+            content.appendChild(historyList);
+            section.appendChild(header);
+            section.appendChild(content);
+            return section;
+        }
+
+        renderHistory(container) {
+            container.innerHTML = '';
+
+            if (this.state.history.length === 0) {
+                const emptyItem = document.createElement('div');
+                emptyItem.className = 'hrt-history-item';
+                emptyItem.textContent = 'No history yet';
+                container.appendChild(emptyItem);
                 return;
             }
 
-            jsonForm.classList.remove('http-request-hidden');
-            rawJson.classList.add('http-request-hidden');
-            toggleBtn.textContent = 'Switch to Raw JSON';
-        } else {
-            const jsonData = collectJsonData();
-            rawJson.value = JSON.stringify(jsonData, null, 2);
+            this.state.history.slice().reverse().forEach(item => {
+                const historyItem = document.createElement('div');
+                historyItem.className = `hrt-history-item ${item.id === this.state.currentHistoryId ? 'active' : ''}`;
+                historyItem.dataset.id = item.id;
+                historyItem.style.cssText = `
+                    padding: 8px 12px;
+                    border-bottom: 1px solid #eee;
+                    cursor: pointer;
+                    transition: all 0.2s ease;
+                `;
 
-            jsonForm.classList.add('http-request-hidden');
-            rawJson.classList.remove('http-request-hidden');
-            toggleBtn.textContent = 'Switch to Form';
+                historyItem.addEventListener('click', () => this.loadHistoryItem(item.id));
+
+                const urlElement = document.createElement('div');
+                urlElement.className = 'hrt-history-url';
+                urlElement.style.fontWeight = '500';
+                urlElement.style.marginBottom = '4px';
+                urlElement.textContent = `${item.method} ${item.url}`;
+
+                const detailsElement = document.createElement('div');
+                detailsElement.className = 'hrt-history-details';
+                detailsElement.style.fontSize = '12px';
+                detailsElement.style.color = '#666';
+                detailsElement.style.display = 'flex';
+                detailsElement.style.gap = '12px';
+
+                const statusElement = document.createElement('span');
+                statusElement.className = 'hrt-history-status';
+                statusElement.style.padding = '1px 4px';
+                statusElement.style.borderRadius = '2px';
+                statusElement.style.fontSize = '11px';
+                statusElement.textContent = item.status;
+
+                const timeElement = document.createElement('span');
+                timeElement.textContent = new Date(item.timestamp).toLocaleString();
+
+                if (item.status >= 200 && item.status < 300) {
+                    statusElement.className = 'hrt-history-status status-success';
+                    statusElement.style.backgroundColor = '#e8f5e9';
+                    statusElement.style.color = '#2e7d32';
+                } else if (item.status >= 300 && item.status < 400) {
+                    statusElement.className = 'hrt-history-status status-redirect';
+                    statusElement.style.backgroundColor = '#e8eaf6';
+                    statusElement.style.color = '#1a237e';
+                } else if (item.status >= 400 && item.status < 500) {
+                    statusElement.className = 'hrt-history-status status-client-error';
+                    statusElement.style.backgroundColor = '#fff3e0';
+                    statusElement.style.color = '#f57c00';
+                } else {
+                    statusElement.className = 'hrt-history-status status-server-error';
+                    statusElement.style.backgroundColor = '#ffebee';
+                    statusElement.style.color = '#b71c1c';
+                }
+
+                detailsElement.appendChild(statusElement);
+                detailsElement.appendChild(timeElement);
+
+                historyItem.appendChild(urlElement);
+                historyItem.appendChild(detailsElement);
+                container.appendChild(historyItem);
+            });
         }
-    }
 
-    function collectJsonData() {
-        const jsonData = {};
-        const rows = document.querySelectorAll('#http-request-json-form .http-request-json-row');
+        loadHistoryItem(id) {
+            const item = this.state.history.find(h => h.id === id);
+            if (!item) return;
 
-        rows.forEach(row => {
-            const key = row.querySelector('input[type="text"]').value;
-            if (!key) return;
+            this.state.currentHistoryId = id;
+            this.renderHistory(document.getElementById('hrt-history-list'));
 
-            const type = row.querySelector('.http-request-json-type').value;
-            const valueElement = row.querySelector('.http-request-json-value input, .http-request-json-value textarea');
-            let value = valueElement.value;
+            document.getElementById('hrt-url').value = item.url;
 
-            switch (type) {
-                case 'number':
-                    value = parseFloat(value);
-                    break;
-                case 'boolean':
-                    value = value.toLowerCase() === 'true';
-                    break;
-                case 'object':
-                case 'array':
-                    try {
-                        value = JSON.parse(value);
-                    } catch (e) {
-                        value = {};
-                    }
-                    break;
-                case 'null':
-                    value = null;
-                    break;
+            document.querySelectorAll('.hrt-method-btn').forEach(btn => {
+                btn.classList.remove('active');
+                if (btn.dataset.method === item.method) {
+                    btn.classList.add('active');
+                }
+            });
+            this.state.method = item.method;
+
+            const bodySection = document.getElementById('hrt-body-section');
+            bodySection.style.display = item.method === 'POST' || item.method === 'PUT' || item.method === 'PATCH' ? 'block' : 'none';
+
+            const headersContainer = document.getElementById('hrt-headers-container');
+            headersContainer.innerHTML = '';
+            item.request.headers.forEach(header => {
+                this.addKeyValueRow(headersContainer, header.key, header.value);
+            });
+
+            const cookiesContainer = document.getElementById('hrt-cookies-container');
+            cookiesContainer.innerHTML = '';
+            item.request.cookies.forEach(cookie => {
+                this.addKeyValueRow(cookiesContainer, cookie.key, cookie.value);
+            });
+
+            if (item.method === 'POST' || item.method === 'PUT' || item.method === 'PATCH') {
+                bodySection.style.display = 'block';
+
+                try {
+                    const jsonData = JSON.parse(item.request.body);
+                    const jsonForm = document.getElementById('hrt-json-form');
+                    jsonForm.innerHTML = '';
+                    Object.keys(jsonData).forEach(key => {
+                        const value = jsonData[key];
+                        const type = typeof value;
+                        this.addJsonRow(jsonForm, key, value, type);
+                    });
+                    this.state.useJsonForm = true;
+                    document.getElementById('hrt-raw-json').classList.add('hrt-hidden');
+                    document.getElementById('hrt-json-mode-toggle').querySelector('button').textContent = 'Switch to Raw JSON';
+                } catch (e) {
+                    document.getElementById('hrt-raw-json').value = item.request.body;
+                    this.state.useJsonForm = false;
+                    document.getElementById('hrt-json-form').classList.add('hrt-hidden');
+                    document.getElementById('hrt-json-mode-toggle').querySelector('button').textContent = 'Switch to Form';
+                }
+            } else {
+                bodySection.style.display = 'none';
             }
 
-            jsonData[key] = value;
-        });
+            const statusCode = document.getElementById('hrt-status-code');
+            const statusText = document.getElementById('hrt-status-text');
+            const resultBody = document.getElementById('hrt-result-body');
 
-        return jsonData;
-    }
+            statusCode.textContent = item.status;
+            statusText.textContent = item.statusText;
 
-    function updateUI() {
-        document.getElementById('http-request-url').value = state.url;
+            if (item.status >= 200 && item.status < 300) {
+                statusCode.className = 'status-success';
+                statusCode.style.backgroundColor = '#e8f5e9';
+                statusCode.style.color = '#2e7d32';
+            } else if (item.status >= 300 && item.status < 400) {
+                statusCode.className = 'status-redirect';
+                statusCode.style.backgroundColor = '#e8eaf6';
+                statusCode.style.color = '#1a237e';
+            } else if (item.status >= 400 && item.status < 500) {
+                statusCode.className = 'status-client-error';
+                statusCode.style.backgroundColor = '#fff3e0';
+                statusCode.style.color = '#f57c00';
+            } else {
+                statusCode.className = 'status-server-error';
+                statusCode.style.backgroundColor = '#ffebee';
+                statusCode.style.color = '#b71c1c';
+            }
 
-        selectMethod(state.method);
+            try {
+                const jsonData = JSON.parse(item.response.body);
+                resultBody.textContent = JSON.stringify(jsonData, null, 2);
+            } catch (e) {
+                resultBody.textContent = item.response.body;
+            }
 
-        Object.keys(state.sections).forEach(section => {
-            const sectionElement = document.querySelector(`.http-request-section[data-section="${section}"]`);
-            if (sectionElement) {
-                if (state.sections[section]) {
-                    sectionElement.classList.add('collapsed');
+            window.httpRequestResponse = item.response.body;
+
+            this.state.sections.result = false;
+            this.updateSectionVisibility('result', document.querySelector('[data-section="result"]'));
+        }
+
+        addKeyValueRow(container, key, value, index = null) {
+            const row = document.createElement('div');
+            row.className = 'hrt-key-value-pair';
+            row.style.display = 'grid';
+            row.style.gridTemplateColumns = '1fr 3fr auto';
+            row.style.gap = '8px';
+            row.style.marginBottom = '8px';
+
+            const keyInput = document.createElement('input');
+            keyInput.type = 'text';
+            keyInput.placeholder = 'Key';
+            keyInput.value = key;
+            keyInput.style.cssText = `
+                padding: 6px 8px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 13px;
+            `;
+
+            const valueInput = document.createElement('input');
+            valueInput.type = 'text';
+            valueInput.placeholder = 'Value';
+            valueInput.value = value;
+            valueInput.style.cssText = `
+                padding: 6px 8px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 13px;
+            `;
+
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'hrt-remove-btn';
+            removeBtn.innerHTML = '<i class="fa fa-times"></i>';
+            removeBtn.style.cssText = `
+                padding: 6px 10px;
+                background: #ff6b6b;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 12px;
+                transition: all 0.2s ease;
+            `;
+
+            removeBtn.addEventListener('click', () => row.remove());
+
+            row.appendChild(keyInput);
+            row.appendChild(valueInput);
+            row.appendChild(removeBtn);
+
+            if (index !== null && container.children.length > index) {
+                container.insertBefore(row, container.children[index]);
+            } else {
+                container.appendChild(row);
+            }
+        }
+
+        updateSectionVisibility(sectionName, sectionElement) {
+            const content = sectionElement.querySelector('.hrt-section-content');
+            content.style.display = this.state.sections[sectionName] ? 'none' : 'block';
+
+            const icon = sectionElement.querySelector('.hrt-toggle-icon');
+            icon.style.transform = this.state.sections[sectionName] ? 'rotate(-90deg)' : 'rotate(0)';
+        }
+
+        collectJsonData() {
+            const jsonData = {};
+            const rows = document.querySelectorAll('#hrt-json-form .hrt-json-row');
+
+            rows.forEach(row => {
+                const key = row.querySelector('input[type="text"]').value;
+                if (!key) return;
+
+                const type = row.querySelector('.hrt-json-type').value;
+                const valueElement = row.querySelector('.hrt-json-value input, .hrt-json-value textarea, .hrt-json-value select');
+                let value = valueElement.value;
+
+                switch (type) {
+                    case 'number':
+                        value = parseFloat(value);
+                        if (isNaN(value)) value = 0;
+                        break;
+                    case 'boolean':
+                        value = value.toLowerCase() === 'true';
+                        break;
+                    case 'object':
+                        try {
+                            value = JSON.parse(value);
+                        } catch (e) {
+                            value = {};
+                        }
+                        break;
+                    case 'array':
+                        try {
+                            value = JSON.parse(value);
+                            if (!Array.isArray(value)) value = [];
+                        } catch (e) {
+                            value = [];
+                        }
+                        break;
+                    case 'null':
+                        value = null;
+                        break;
+                }
+
+                jsonData[key] = value;
+            });
+
+            return jsonData;
+        }
+
+        collectFormData() {
+            const formData = {
+                url: document.getElementById('hrt-url').value,
+                method: this.state.method,
+                headers: [],
+                cookies: [],
+                body: ''
+            };
+
+            const headerRows = document.querySelectorAll('#hrt-headers-container .hrt-key-value-pair');
+            headerRows.forEach(row => {
+                const key = row.querySelector('input:first-child').value;
+                const value = row.querySelector('input:nth-child(2)').value;
+                if (key) {
+                    formData.headers.push({ key, value });
+                }
+            });
+
+            const cookieRows = document.querySelectorAll('#hrt-cookies-container .hrt-key-value-pair');
+            cookieRows.forEach(row => {
+                const key = row.querySelector('input:first-child').value;
+                const value = row.querySelector('input:nth-child(2)').value;
+                if (key) {
+                    formData.cookies.push({ key, value });
+                }
+            });
+
+            this.state.cookies = formData.cookies;
+            this.saveSettings();
+
+            if (formData.method === 'POST' || formData.method === 'PUT' || formData.method === 'PATCH') {
+                if (this.state.useJsonForm) {
+                    formData.body = JSON.stringify(this.collectJsonData(), null, 2);
                 } else {
-                    sectionElement.classList.remove('collapsed');
+                    formData.body = document.getElementById('hrt-raw-json').value;
                 }
             }
-        });
-    }
 
-    function toggleSection(sectionKey) {
-        state.sections[sectionKey] = !state.sections[sectionKey];
-        updateUI();
-    }
-
-    function collectFormData() {
-        const formData = {
-            url: document.getElementById('http-request-url').value,
-            method: state.method,
-            headers: [],
-            cookies: [],
-            body: ''
-        };
-
-        const headerRows = document.querySelectorAll('#http-request-headers .http-request-key-value-pair');
-        headerRows.forEach(row => {
-            const key = row.querySelector('input:first-child').value;
-            const value = row.querySelector('input:nth-child(2)').value;
-            if (key) {
-                formData.headers.push({ key, value });
-            }
-        });
-
-        const cookieRows = document.querySelectorAll('#http-request-cookies .http-request-key-value-pair');
-        const cookies = [];
-        cookieRows.forEach(row => {
-            const key = row.querySelector('input:first-child').value;
-            const value = row.querySelector('input:nth-child(2)').value;
-            if (key) {
-                cookies.push({ key, value });
-            }
-        });
-        formData.cookies = cookies;
-
-        GM_setValue('http-request-tool-cookies', cookies);
-
-        if (formData.method === 'POST' || formData.method === 'PUT' || formData.method === 'PATCH') {
-            if (state.useJsonForm) {
-                formData.body = JSON.stringify(collectJsonData(), null, 2);
-            } else {
-                formData.body = document.getElementById('http-request-body').value;
-            }
+            return formData;
         }
 
-        return formData;
-    }
+        sendRequest() {
+            const data = this.collectFormData();
+            if (!data.url) {
+                this.showToast('Please enter a URL');
+                return;
+            }
 
-    function sendRequest() {
-        const data = collectFormData();
+            const statusCode = document.getElementById('hrt-status-code');
+            const statusText = document.getElementById('hrt-status-text');
+            const resultBody = document.getElementById('hrt-result-body');
 
-        const resultHeader = document.getElementById('http-request-result-header');
-        const resultBody = document.getElementById('http-request-result-body');
-        const statusCodeEl = document.getElementById('http-request-status-code');
-        const statusTextEl = document.getElementById('http-request-status-text');
-        const openHtmlBtn = document.getElementById('http-request-open-html-btn');
+            statusCode.textContent = '';
+            statusText.textContent = 'Sending request...';
+            resultBody.textContent = '';
 
-        resultHeader.style.display = 'block';
-        statusCodeEl.textContent = '';
-        statusTextEl.textContent = 'Sending request...';
-        resultBody.textContent = '';
-        openHtmlBtn.classList.add('http-request-hidden');
+            const headers = {};
+            data.headers.forEach(header => {
+                headers[header.key] = header.value;
+            });
 
-        const headers = {};
-        data.headers.forEach(header => {
-            headers[header.key] = header.value;
-        });
+            const cookieString = data.cookies.map(c => `${c.key}=${c.value}`).join('; ');
+            if (cookieString) {
+                headers['Cookie'] = cookieString;
+            }
 
-        const cookieString = data.cookies.map(c => `${c.key}=${c.value}`).join('; ');
-        if (cookieString) {
-            headers['Cookie'] = cookieString;
-        }
-
-        try {
             GM_xmlhttpRequest({
                 method: data.method,
                 url: data.url,
                 headers: headers,
                 data: data.body,
-                onload: function(response) {
+                onload: (response) => {
                     const statusCode = response.status;
-                    statusCodeEl.textContent = statusCode;
+                    const statusText = response.statusText;
 
+                    document.getElementById('hrt-status-code').textContent = statusCode;
+                    document.getElementById('hrt-status-text').textContent = statusText;
+
+                    const statusEl = document.getElementById('hrt-status-code');
+                    statusEl.className = '';
                     if (statusCode >= 200 && statusCode < 300) {
-                        statusCodeEl.className = 'status-success';
+                        statusEl.className = 'status-success';
+                        statusEl.style.backgroundColor = '#e8f5e9';
+                        statusEl.style.color = '#2e7d32';
                     } else if (statusCode >= 300 && statusCode < 400) {
-                        statusCodeEl.className = 'status-redirect';
+                        statusEl.className = 'status-redirect';
+                        statusEl.style.backgroundColor = '#e8eaf6';
+                        statusEl.style.color = '#1a237e';
                     } else if (statusCode >= 400 && statusCode < 500) {
-                        statusCodeEl.className = 'status-client-error';
+                        statusEl.className = 'status-client-error';
+                        statusEl.style.backgroundColor = '#fff3e0';
+                        statusEl.style.color = '#f57c00';
                     } else {
-                        statusCodeEl.className = 'status-server-error';
+                        statusEl.className = 'status-server-error';
+                        statusEl.style.backgroundColor = '#ffebee';
+                        statusEl.style.color = '#b71c1c';
                     }
-
-                    statusTextEl.textContent = response.statusText;
 
                     try {
                         const jsonData = JSON.parse(response.responseText);
                         resultBody.textContent = JSON.stringify(jsonData, null, 2);
                     } catch (e) {
                         resultBody.textContent = response.responseText;
-
-                        if (response.responseText.trim().startsWith('<!DOCTYPE html>') ||
-                            response.responseText.trim().startsWith('<html')) {
-                            openHtmlBtn.classList.remove('http-request-hidden');
-                        } else {
-                            openHtmlBtn.classList.add('http-request-hidden');
-                        }
                     }
 
                     window.httpRequestResponse = response.responseText;
+
+                    const historyItem = {
+                        id: Date.now().toString(),
+                        timestamp: new Date().toISOString(),
+                        url: data.url,
+                        method: data.method,
+                        status: statusCode,
+                        statusText: statusText,
+                        request: {
+                            headers: data.headers,
+                            cookies: data.cookies,
+                            body: data.body
+                        },
+                        response: {
+                            headers: response.responseHeaders,
+                            body: response.responseText
+                        }
+                    };
+
+                    this.state.history.push(historyItem);
+                    this.state.currentHistoryId = historyItem.id;
+                    this.saveSettings();
+                    this.renderHistory(document.getElementById('hrt-history-list'));
+                    this.state.sections.result = false;
+                    this.updateSectionVisibility('result', document.querySelector('[data-section="result"]'));
+
+                    this.showToast('Request sent successfully');
                 },
-                onerror: function(error) {
-                    statusCodeEl.textContent = 'Error';
-                    statusCodeEl.className = 'status-server-error';
-                    statusTextEl.textContent = '';
-                    resultBody.textContent = `Request failed: ${error}`;
-                    openHtmlBtn.classList.add('http-request-hidden');
+                onerror: (error) => {
+                    document.getElementById('hrt-status-code').textContent = 'Error';
+                    document.getElementById('hrt-status-text').textContent = '';
+                    document.getElementById('hrt-result-body').textContent = `Request failed: ${error}`;
+                    this.showToast('Request error');
                 },
-                ontimeout: function() {
-                    statusCodeEl.textContent = 'Timeout';
-                    statusCodeEl.className = 'status-server-error';
-                    statusTextEl.textContent = '';
-                    resultBody.textContent = 'The request timed out.';
-                    openHtmlBtn.classList.add('http-request-hidden');
+                ontimeout: () => {
+                    document.getElementById('hrt-status-code').textContent = 'Timeout';
+                    document.getElementById('hrt-status-text').textContent = '';
+                    document.getElementById('hrt-result-body').textContent = 'The request timed out.';
+                    this.showToast('Request timed out');
                 }
             });
-        } catch (error) {
-            statusCodeEl.textContent = 'Exception';
-            statusCodeEl.className = 'status-server-error';
-            statusTextEl.textContent = '';
-            resultBody.textContent = error.message;
-            openHtmlBtn.classList.add('http-request-hidden');
-        }
-    }
-
-    function copyResponseToClipboard() {
-        const resultBody = document.getElementById('http-request-result-body');
-        const textToCopy = resultBody.textContent;
-
-        navigator.clipboard.writeText(textToCopy).then(() => {
-            showToast('Response copied to clipboard!');
-        }).catch(err => {
-            showToast('Failed to copy response: ' + err.message);
-        });
-    }
-
-    function openHtmlResponse() {
-        if (!window.httpRequestResponse) {
-            showToast('No HTML response to open');
-            return;
         }
 
-        const newTab = window.open('about:blank', '_blank');
-        if (newTab) {
-            newTab.document.write(window.httpRequestResponse);
-            newTab.document.close();
-        } else {
-            showToast('Failed to open new tab. Please allow popups for this site.');
+        copyResponseToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                this.showToast('Response copied to clipboard');
+            }).catch(err => {
+                this.showToast('Failed to copy: ' + err.message);
+            });
         }
-    }
+        openResponseInNewTab(text) {
+            if (!text) {
+                this.showToast('No response to open');
+                return;
+            }
 
-    function toggleWindow() {
-        const content = document.getElementById('http-request-content');
-        const minimizeBtn = document.getElementById('http-request-minimize');
-
-        state.isMinimized = !state.isMinimized;
-
-        if (state.isMinimized) {
-            content.classList.add('http-request-hidden');
-            minimizeBtn.innerHTML = '<i class="fa fa-plus"></i>';
-        } else {
-            content.classList.remove('http-request-hidden');
-            minimizeBtn.innerHTML = '';
+            GM_openInTab('about:blank', {
+                content: `
+                    <html>
+                    <head>
+                        <title>Response - HTTP Request Tool</title>
+                        <style>
+                            body { font-family: monospace; margin: 0; padding: 20px; }
+                            pre { white-space: pre-wrap; word-wrap: break-word; }
+                        </style>
+                    </head>
+                    <body>
+                        <pre>${text}</pre>
+                    </body>
+                    </html>
+                `
+            });
         }
-    }
+        makeDraggable(element, handle) {
+            let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+            let isDragging = false;
 
-    function closeWindow() {
-        const floatWindow = document.getElementById('http-request-float-window');
-        floatWindow.remove();
-        state.isOpen = false;
+            handle.onmousedown = (e) => {
+                e.preventDefault();
+                pos3 = e.clientX;
+                pos4 = e.clientY;
+                isDragging = true;
 
-        createToggleButton();
-    }
+                element.style.transition = 'none';
+                element.style.boxShadow = '0 8px 30px rgba(0,0,0,0.2)';
 
-    function createToggleButton() {
-        const button = document.createElement('button');
-        button.id = 'http-request-toggle-btn';
-        button.textContent = 'HTTP Request Tool';
-        button.addEventListener('click', () => {
-            button.remove();
-            createFloatWindow();
-            state.isOpen = true;
-        });
-
-        document.body.appendChild(button);
-    }
-
-    function makeDraggable(element, handle) {
-        let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
-        let isDragging = false;
-
-        handle.onmousedown = dragMouseDown;
-
-        function dragMouseDown(e) {
-            e.preventDefault();
-            pos3 = e.clientX;
-            pos4 = e.clientY;
-            isDragging = true;
-
-            element.style.transition = 'none';
-            element.style.boxShadow = '0 8px 30px rgba(0,0,0,0.2)';
-
-            document.onmouseup = closeDragElement;
-            document.onmousemove = elementDrag;
+                document.onmouseup = this.closeDragElement.bind(this);
+                document.onmousemove = this.elementDrag.bind(this, element);
+            };
         }
-
-        function elementDrag(e) {
+        elementDrag(element, e) {
             if (!isDragging) return;
 
             e.preventDefault();
-            pos1 = pos3 - e.clientX;
-            pos2 = pos4 - e.clientY;
+            const pos1 = pos3 - e.clientX;
+            const pos2 = pos4 - e.clientY;
             pos3 = e.clientX;
             pos4 = e.clientY;
 
@@ -1116,16 +1391,64 @@
             element.style.top = Math.max(0, Math.min(maxTop, newTop)) + "px";
             element.style.left = Math.max(0, Math.min(maxLeft, newLeft)) + "px";
         }
-
-        function closeDragElement() {
+        closeDragElement() {
+            isDragging = false;
             document.onmouseup = null;
             document.onmousemove = null;
-            isDragging = false;
-            element.style.transition = 'all 0.3s ease';
-            element.style.boxShadow = '0 4px 20px rgba(0,0,0,0.15)';
+
+            if (this.elements.floatWindow) {
+                this.elements.floatWindow.style.transition = 'all 0.3s ease';
+                this.elements.floatWindow.style.boxShadow = '0 4px 20px rgba(0,0,0,0.15)';
+            } else if (this.elements.toggleBtn) {
+                this.elements.toggleBtn.style.transition = 'all 0.3s ease';
+                this.elements.toggleBtn.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+            }
+        }
+        showToast(message) {
+            if (!this.elements.toast) {
+                this.elements.toast = document.createElement('div');
+                this.elements.toast.id = 'hrt-toast';
+                this.elements.toast.style.cssText = `
+                    position: fixed;
+                    top: 20px;
+                    right: 20px;
+                    padding: 10px 16px;
+                    background: #333;
+                    color: white;
+                    border-radius: 4px;
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                    z-index: 10000;
+                    opacity: 0;
+                    transition: opacity 0.3s ease;
+                `;
+                document.body.appendChild(this.elements.toast);
+            }
+
+            const toast = this.elements.toast;
+            toast.textContent = message;
+            toast.classList.add('show');
+
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 2000);
+        }
+        addEventListeners() {
+            window.addEventListener('resize', () => {
+                if (this.elements.floatWindow) {
+                    const floatWindow = this.elements.floatWindow;
+                    const maxTop = window.innerHeight - floatWindow.offsetHeight;
+                    const maxLeft = window.innerWidth - floatWindow.offsetWidth;
+
+                    if (parseInt(floatWindow.style.top) > maxTop) {
+                        floatWindow.style.top = maxTop + "px";
+                    }
+
+                    if (parseInt(floatWindow.style.left) > maxLeft) {
+                        floatWindow.style.left = maxLeft + "px";
+                    }
+                }
+            });
         }
     }
-
-    initDefaultCookies();
-    createToggleButton();
+    const hrTool = new HRTool();
 })();
