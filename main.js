@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         HTTP Request Tool
+// @name         HTTP Request Tool(HRT)
 // @namespace    https://github.com/heikeson/http-request-tool
-// @version      2.0
+// @version      2.5
 // @description  HTTP request tool with URL auto-detection, cookie management and beautiful UI
 // @author       heikeson
 // @match        *://*/*
@@ -29,19 +29,30 @@
                     form: false,
                     headers: false,
                     cookies: true,
-                    body: false,
                     result: false,
                     history: false
                 },
                 history: [],
                 historyLimit: GM_getValue('historyLimit', 20),
-                currentHistoryId: null
+                currentHistoryId: null,
+                isFullScreen: false
             };
 
             this.elements = {
                 floatWindow: null,
                 toggleBtn: null,
-                toast: null
+                toast: null,
+                fullScreenBtn: null
+            };
+
+            this.dragState = {
+                isDragging: false,
+                element: null,
+                initialX: 0,
+                initialY: 0,
+                initialTop: 0,
+                initialLeft: 0,
+                isFullScreen: false
             };
 
             this.init();
@@ -50,13 +61,14 @@
         init() {
             this.loadSettings();
             this.createToggleButton();
-            this.addEventListeners();
+            this.addGlobalEventListeners();
         }
-
         loadSettings() {
             this.state.cookies = GM_getValue('cookies', []);
             this.state.history = GM_getValue('history', []);
             this.state.historyLimit = GM_getValue('historyLimit', 20);
+
+            this.trimHistory();
         }
 
         saveSettings() {
@@ -97,7 +109,7 @@
 
             document.body.appendChild(btn);
             this.elements.toggleBtn = btn;
-            this.makeDraggable(btn, btn);
+            this.setupDraggableElement(btn);
         }
 
         createFloatWindow() {
@@ -118,7 +130,6 @@
             `;
 
             const header = this.createHeader();
-
             const content = document.createElement('div');
             content.id = 'hrt-content';
             content.style.padding = '16px';
@@ -136,7 +147,7 @@
             document.body.appendChild(floatWindow);
 
             this.elements.floatWindow = floatWindow;
-            this.makeDraggable(floatWindow, header);
+            this.setupDraggableElement(floatWindow, header);
         }
 
         createHeader() {
@@ -155,6 +166,26 @@
 
             const title = document.createElement('div');
             title.textContent = 'HTTP Request Tool (HRT)';
+
+            const fullScreenBtn = document.createElement('button');
+            fullScreenBtn.id = 'hrt-fullscreen-btn';
+            fullScreenBtn.innerHTML = '<i class="fa fa-expand"></i>';
+            fullScreenBtn.style.cssText = `
+                width: 24px;
+                height: 24px;
+                border-radius: 50%;
+                border: none;
+                cursor: pointer;
+                background: #4a90e2;
+                color: white;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                transition: all 0.2s ease;
+                margin-right: 8px;
+            `;
+
+            fullScreenBtn.addEventListener('click', () => this.toggleFullScreen());
 
             const closeBtn = document.createElement('button');
             closeBtn.id = 'hrt-close-btn';
@@ -179,8 +210,44 @@
             });
 
             header.appendChild(title);
+            header.appendChild(fullScreenBtn);
             header.appendChild(closeBtn);
+            this.elements.fullScreenBtn = fullScreenBtn;
             return header;
+        }
+
+        toggleFullScreen() {
+            this.state.isFullScreen = !this.state.isFullScreen;
+            const floatWindow = this.elements.floatWindow;
+
+            if (this.state.isFullScreen) {
+                this.state.lastPosition = {
+                    top: floatWindow.style.top,
+                    right: floatWindow.style.right,
+                    bottom: floatWindow.style.bottom,
+                    left: floatWindow.style.left,
+                    width: floatWindow.style.width,
+                    height: floatWindow.style.height
+                };
+
+                floatWindow.style.top = '0';
+                floatWindow.style.right = '0';
+                floatWindow.style.bottom = '0';
+                floatWindow.style.left = '0';
+                floatWindow.style.width = 'auto';
+                floatWindow.style.height = 'auto';
+                floatWindow.style.borderRadius = '0';
+                this.elements.fullScreenBtn.innerHTML = '<i class="fa fa-compress"></i>';
+            } else {
+                floatWindow.style.top = this.state.lastPosition.top || '50px';
+                floatWindow.style.right = this.state.lastPosition.right || '50px';
+                floatWindow.style.bottom = this.state.lastPosition.bottom || 'auto';
+                floatWindow.style.left = this.state.lastPosition.left || 'auto';
+                floatWindow.style.width = this.state.lastPosition.width || '520px';
+                floatWindow.style.height = this.state.lastPosition.height || 'auto';
+                floatWindow.style.borderRadius = '8px';
+                this.elements.fullScreenBtn.innerHTML = '<i class="fa fa-expand"></i>';
+            }
         }
 
         createFormSection() {
@@ -665,6 +732,23 @@
                 this.addKeyValueRow(container, cookie.key, cookie.value, index);
             });
 
+            const loadCookiesBtn = document.createElement('button');
+            loadCookiesBtn.id = 'hrt-load-cookies-btn';
+            loadCookiesBtn.innerHTML = '<i class="fa fa-refresh"></i> Load Current Site Cookies';
+            loadCookiesBtn.style.cssText = `
+                padding: 6px 12px;
+                background: #4a90e2;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 13px;
+                margin-bottom: 8px;
+                transition: all 0.2s ease;
+            `;
+
+            loadCookiesBtn.addEventListener('click', () => this.loadCurrentSiteCookies());
+
             const addBtn = document.createElement('button');
             addBtn.id = 'hrt-add-cookie-btn';
             addBtn.innerHTML = '<i class="fa fa-plus"></i> Add';
@@ -681,11 +765,40 @@
 
             addBtn.addEventListener('click', () => this.addKeyValueRow(container, '', ''));
 
+            content.appendChild(loadCookiesBtn);
             content.appendChild(container);
             content.appendChild(addBtn);
             section.appendChild(header);
             section.appendChild(content);
             return section;
+        }
+
+        loadCurrentSiteCookies() {
+            const container = document.getElementById('hrt-cookies-container');
+            container.innerHTML = '';
+
+            const cookies = document.cookie.split('; ');
+            cookies.forEach(cookie => {
+                if (cookie) {
+                    const [key, value] = cookie.split('=');
+                    if (key) {
+                        this.addKeyValueRow(container, key, value || '');
+                    }
+                }
+            });
+
+            this.state.cookies = [];
+            const cookieRows = document.querySelectorAll('#hrt-cookies-container .hrt-key-value-pair');
+            cookieRows.forEach(row => {
+                const key = row.querySelector('input:first-child').value;
+                const value = row.querySelector('input:nth-child(2)').value;
+                if (key) {
+                    this.state.cookies.push({ key, value });
+                }
+            });
+
+            this.saveSettings();
+            this.showToast('Current site cookies loaded');
         }
 
         createResultSection() {
@@ -870,13 +983,31 @@
                 const limit = parseInt(e.target.value);
                 if (!isNaN(limit) && limit >= 1 && limit <= 100) {
                     this.state.historyLimit = limit;
+                    this.trimHistory(); 
                     this.saveSettings();
                     this.renderHistory(content);
                 }
             });
 
+            const clearHistoryBtn = document.createElement('button');
+            clearHistoryBtn.id = 'hrt-clear-history-btn';
+            clearHistoryBtn.innerHTML = '<i class="fa fa-trash"></i> Clear History';
+            clearHistoryBtn.style.cssText = `
+                padding: 4px 12px;
+                background: #ff6b6b;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 12px;
+                transition: all 0.2s ease;
+            `;
+
+            clearHistoryBtn.addEventListener('click', () => this.clearHistory());
+
             controls.appendChild(limitLabel);
             controls.appendChild(limitInput);
+            controls.appendChild(clearHistoryBtn);
 
             const historyList = document.createElement('div');
             historyList.id = 'hrt-history-list';
@@ -895,6 +1026,27 @@
             section.appendChild(header);
             section.appendChild(content);
             return section;
+        }
+
+        clearHistory() {
+            if (this.state.history.length === 0) {
+                this.showToast('History is already empty');
+                return;
+            }
+
+            this.state.history = [];
+            this.state.currentHistoryId = null;
+            this.saveSettings();
+            this.renderHistory(document.getElementById('hrt-history-list'));
+            this.showToast('History cleared successfully');
+        }
+
+        trimHistory() {
+            if (this.state.history.length <= this.state.historyLimit) return;
+
+            this.state.history.sort((a, b) => a.timestamp - b.timestamp);
+            this.state.history = this.state.history.slice(-this.state.historyLimit);
+            this.saveSettings();
         }
 
         renderHistory(container) {
@@ -1115,24 +1267,13 @@
             row.appendChild(keyInput);
             row.appendChild(valueInput);
             row.appendChild(removeBtn);
+            container.appendChild(row);
 
-            if (index !== null && container.children.length > index) {
-                container.insertBefore(row, container.children[index]);
-            } else {
-                container.appendChild(row);
-            }
-        }
-
-        updateSectionVisibility(sectionName, sectionElement) {
-            const content = sectionElement.querySelector('.hrt-section-content');
-            content.style.display = this.state.sections[sectionName] ? 'none' : 'block';
-
-            const icon = sectionElement.querySelector('.hrt-toggle-icon');
-            icon.style.transform = this.state.sections[sectionName] ? 'rotate(-90deg)' : 'rotate(0)';
+            return row;
         }
 
         collectJsonData() {
-            const jsonData = {};
+            const result = {};
             const rows = document.querySelectorAll('#hrt-json-form .hrt-json-row');
 
             rows.forEach(row => {
@@ -1140,28 +1281,31 @@
                 if (!key) return;
 
                 const type = row.querySelector('.hrt-json-type').value;
-                const valueElement = row.querySelector('.hrt-json-value input, .hrt-json-value textarea, .hrt-json-value select');
-                let value = valueElement.value;
+                const valueContainer = row.querySelector('.hrt-json-value');
+                const valueInput = valueContainer.querySelector('input, select, textarea');
+                let value;
 
                 switch (type) {
+                    case 'string':
+                        value = valueInput.value;
+                        break;
                     case 'number':
-                        value = parseFloat(value);
+                        value = parseFloat(valueInput.value);
                         if (isNaN(value)) value = 0;
                         break;
                     case 'boolean':
-                        value = value.toLowerCase() === 'true';
+                        value = valueInput.value === 'true';
                         break;
                     case 'object':
                         try {
-                            value = JSON.parse(value);
+                            value = JSON.parse(valueInput.value || '{}');
                         } catch (e) {
                             value = {};
                         }
                         break;
                     case 'array':
                         try {
-                            value = JSON.parse(value);
-                            if (!Array.isArray(value)) value = [];
+                            value = JSON.parse(valueInput.value || '[]');
                         } catch (e) {
                             value = [];
                         }
@@ -1171,284 +1315,352 @@
                         break;
                 }
 
-                jsonData[key] = value;
+                result[key] = value;
             });
 
-            return jsonData;
+            return result;
         }
 
-        collectFormData() {
-            const formData = {
-                url: document.getElementById('hrt-url').value,
-                method: this.state.method,
-                headers: [],
-                cookies: [],
-                body: ''
-            };
+        sendRequest() {
+            const url = document.getElementById('hrt-url').value;
+            if (!url) {
+                this.showToast('URL is required');
+                return;
+            }
 
+            this.state.url = url;
+
+            const headers = [];
             const headerRows = document.querySelectorAll('#hrt-headers-container .hrt-key-value-pair');
             headerRows.forEach(row => {
                 const key = row.querySelector('input:first-child').value;
                 const value = row.querySelector('input:nth-child(2)').value;
                 if (key) {
-                    formData.headers.push({ key, value });
+                    headers.push({ key, value });
                 }
             });
+            this.state.headers = headers;
 
+            const cookies = [];
             const cookieRows = document.querySelectorAll('#hrt-cookies-container .hrt-key-value-pair');
             cookieRows.forEach(row => {
                 const key = row.querySelector('input:first-child').value;
                 const value = row.querySelector('input:nth-child(2)').value;
                 if (key) {
-                    formData.cookies.push({ key, value });
+                    cookies.push({ key, value });
                 }
             });
+            this.state.cookies = cookies;
 
-            this.state.cookies = formData.cookies;
-            this.saveSettings();
-
-            if (formData.method === 'POST' || formData.method === 'PUT' || formData.method === 'PATCH') {
+            let body = '';
+            if (this.state.method === 'POST' || this.state.method === 'PUT' || this.state.method === 'PATCH') {
                 if (this.state.useJsonForm) {
-                    formData.body = JSON.stringify(this.collectJsonData(), null, 2);
+                    try {
+                        body = JSON.stringify(this.collectJsonData());
+                    } catch (e) {
+                        this.showToast('Invalid JSON format');
+                        return;
+                    }
                 } else {
-                    formData.body = document.getElementById('hrt-raw-json').value;
+                    body = document.getElementById('hrt-raw-json').value;
+                    try {
+                        JSON.parse(body); 
+                    } catch (e) {
+
+                    }
                 }
             }
 
-            return formData;
-        }
+            this.state.body = body;
 
-        sendRequest() {
-            const data = this.collectFormData();
-            if (!data.url) {
-                this.showToast('Please enter a URL');
-                return;
+            const requestConfig = {
+                method: this.state.method,
+                url: url,
+                headers: headers.reduce((obj, header) => {
+                    obj[header.key] = header.value;
+                    return obj;
+                }, {}),
+                data: body,
+                onload: (response) => {
+                    this.handleResponse(response);
+                },
+                onerror: (error) => {
+                    this.handleResponse(error);
+                },
+                ontimeout: (error) => {
+                    this.handleResponse(error);
+                }
+            };
+
+            if (cookies.length > 0) {
+                requestConfig.headers['Cookie'] = cookies.map(c => `${c.key}=${c.value}`).join('; ');
             }
 
             const statusCode = document.getElementById('hrt-status-code');
             const statusText = document.getElementById('hrt-status-text');
             const resultBody = document.getElementById('hrt-result-body');
 
-            statusCode.textContent = '';
+            statusCode.textContent = '...';
+            statusCode.className = '';
+            statusCode.style.backgroundColor = '#f0f0f0';
+            statusCode.style.color = '#555';
             statusText.textContent = 'Sending request...';
-            resultBody.textContent = '';
+            resultBody.textContent = 'Waiting for response...';
 
-            const headers = {};
-            data.headers.forEach(header => {
-                headers[header.key] = header.value;
-            });
+            this.state.sections.result = false;
+            this.updateSectionVisibility('result', document.querySelector('[data-section="result"]'));
 
-            const cookieString = data.cookies.map(c => `${c.key}=${c.value}`).join('; ');
-            if (cookieString) {
-                headers['Cookie'] = cookieString;
+            GM_xmlhttpRequest(requestConfig);
+        }
+
+        handleResponse(response) {
+            const statusCode = document.getElementById('hrt-status-code');
+            const statusText = document.getElementById('hrt-status-text');
+            const resultBody = document.getElementById('hrt-result-body');
+
+            statusCode.textContent = response.status;
+            statusText.textContent = response.statusText || (response.error ? response.error : 'Unknown error');
+
+            if (response.status >= 200 && response.status < 300) {
+                statusCode.className = 'status-success';
+                statusCode.style.backgroundColor = '#e8f5e9';
+                statusCode.style.color = '#2e7d32';
+            } else if (response.status >= 300 && response.status < 400) {
+                statusCode.className = 'status-redirect';
+                statusCode.style.backgroundColor = '#e8eaf6';
+                statusCode.style.color = '#1a237e';
+            } else if (response.status >= 400 && response.status < 500) {
+                statusCode.className = 'status-client-error';
+                statusCode.style.backgroundColor = '#fff3e0';
+                statusCode.style.color = '#f57c00';
+            } else {
+                statusCode.className = 'status-server-error';
+                statusCode.style.backgroundColor = '#ffebee';
+                statusCode.style.color = '#b71c1c';
             }
 
-            GM_xmlhttpRequest({
-                method: data.method,
-                url: data.url,
-                headers: headers,
-                data: data.body,
-                onload: (response) => {
-                    const statusCode = response.status;
-                    const statusText = response.statusText;
+            try {
+                const jsonData = JSON.parse(response.responseText);
+                resultBody.textContent = JSON.stringify(jsonData, null, 2);
+            } catch (e) {
+                resultBody.textContent = response.responseText || 'No response body';
+            }
 
-                    document.getElementById('hrt-status-code').textContent = statusCode;
-                    document.getElementById('hrt-status-text').textContent = statusText;
+            window.httpRequestResponse = response.responseText;
 
-                    const statusEl = document.getElementById('hrt-status-code');
-                    statusEl.className = '';
-                    if (statusCode >= 200 && statusCode < 300) {
-                        statusEl.className = 'status-success';
-                        statusEl.style.backgroundColor = '#e8f5e9';
-                        statusEl.style.color = '#2e7d32';
-                    } else if (statusCode >= 300 && statusCode < 400) {
-                        statusEl.className = 'status-redirect';
-                        statusEl.style.backgroundColor = '#e8eaf6';
-                        statusEl.style.color = '#1a237e';
-                    } else if (statusCode >= 400 && statusCode < 500) {
-                        statusEl.className = 'status-client-error';
-                        statusEl.style.backgroundColor = '#fff3e0';
-                        statusEl.style.color = '#f57c00';
-                    } else {
-                        statusEl.className = 'status-server-error';
-                        statusEl.style.backgroundColor = '#ffebee';
-                        statusEl.style.color = '#b71c1c';
-                    }
-
-                    try {
-                        const jsonData = JSON.parse(response.responseText);
-                        resultBody.textContent = JSON.stringify(jsonData, null, 2);
-                    } catch (e) {
-                        resultBody.textContent = response.responseText;
-                    }
-
-                    window.httpRequestResponse = response.responseText;
-
-                    const historyItem = {
-                        id: Date.now().toString(),
-                        timestamp: new Date().toISOString(),
-                        url: data.url,
-                        method: data.method,
-                        status: statusCode,
-                        statusText: statusText,
-                        request: {
-                            headers: data.headers,
-                            cookies: data.cookies,
-                            body: data.body
-                        },
-                        response: {
-                            headers: response.responseHeaders,
-                            body: response.responseText
-                        }
-                    };
-
-                    this.state.history.push(historyItem);
-                    this.state.currentHistoryId = historyItem.id;
-                    this.saveSettings();
-                    this.renderHistory(document.getElementById('hrt-history-list'));
-                    this.state.sections.result = false;
-                    this.updateSectionVisibility('result', document.querySelector('[data-section="result"]'));
-
-                    this.showToast('Request sent successfully');
+            const historyItem = {
+                id: Date.now().toString(),
+                timestamp: Date.now(),
+                method: this.state.method,
+                url: this.state.url,
+                status: response.status,
+                statusText: response.statusText,
+                request: {
+                    headers: this.state.headers,
+                    cookies: this.state.cookies,
+                    body: this.state.body
                 },
-                onerror: (error) => {
-                    document.getElementById('hrt-status-code').textContent = 'Error';
-                    document.getElementById('hrt-status-text').textContent = '';
-                    document.getElementById('hrt-result-body').textContent = `Request failed: ${error}`;
-                    this.showToast('Request error');
-                },
-                ontimeout: () => {
-                    document.getElementById('hrt-status-code').textContent = 'Timeout';
-                    document.getElementById('hrt-status-text').textContent = '';
-                    document.getElementById('hrt-result-body').textContent = 'The request timed out.';
-                    this.showToast('Request timed out');
+                response: {
+                    headers: response.responseHeaders,
+                    body: response.responseText
                 }
-            });
+            };
+
+            this.state.history.push(historyItem);
+            this.state.currentHistoryId = historyItem.id;
+            this.trimHistory();
+            this.saveSettings();
+            this.renderHistory(document.getElementById('hrt-history-list'));
+
+            this.showToast(`Request completed with status ${response.status}`);
         }
 
         copyResponseToClipboard(text) {
             navigator.clipboard.writeText(text).then(() => {
                 this.showToast('Response copied to clipboard');
             }).catch(err => {
-                this.showToast('Failed to copy: ' + err.message);
+                this.showToast('Failed to copy text: ' + err);
             });
         }
+
         openResponseInNewTab(text) {
-            if (!text) {
-                this.showToast('No response to open');
-                return;
-            }
-
-            GM_openInTab('about:blank', {
-                content: `
-                    <html>
-                    <head>
-                        <title>Response - HTTP Request Tool</title>
-                        <style>
-                            body { font-family: monospace; margin: 0; padding: 20px; }
-                            pre { white-space: pre-wrap; word-wrap: break-word; }
-                        </style>
-                    </head>
-                    <body>
-                        <pre>${text}</pre>
-                    </body>
-                    </html>
-                `
-            });
-        }
-        makeDraggable(element, handle) {
-            let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
-            let isDragging = false;
-
-            handle.onmousedown = (e) => {
-                e.preventDefault();
-                pos3 = e.clientX;
-                pos4 = e.clientY;
-                isDragging = true;
-
-                element.style.transition = 'none';
-                element.style.boxShadow = '0 8px 30px rgba(0,0,0,0.2)';
-
-                document.onmouseup = this.closeDragElement.bind(this);
-                document.onmousemove = this.elementDrag.bind(this, element);
-            };
-        }
-        elementDrag(element, e) {
-            if (!isDragging) return;
-
-            e.preventDefault();
-            const pos1 = pos3 - e.clientX;
-            const pos2 = pos4 - e.clientY;
-            pos3 = e.clientX;
-            pos4 = e.clientY;
-
-            const newTop = element.offsetTop - pos2;
-            const newLeft = element.offsetLeft - pos1;
-
-            const maxTop = window.innerHeight - element.offsetHeight;
-            const maxLeft = window.innerWidth - element.offsetWidth;
-
-            element.style.top = Math.max(0, Math.min(maxTop, newTop)) + "px";
-            element.style.left = Math.max(0, Math.min(maxLeft, newLeft)) + "px";
-        }
-        closeDragElement() {
-            isDragging = false;
-            document.onmouseup = null;
-            document.onmousemove = null;
-
-            if (this.elements.floatWindow) {
-                this.elements.floatWindow.style.transition = 'all 0.3s ease';
-                this.elements.floatWindow.style.boxShadow = '0 4px 20px rgba(0,0,0,0.15)';
-            } else if (this.elements.toggleBtn) {
-                this.elements.toggleBtn.style.transition = 'all 0.3s ease';
-                this.elements.toggleBtn.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+            try {
+                const blob = new Blob([text], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                GM_openInTab(url, { active: true });
+            } catch (e) {
+                this.showToast('Failed to open response in new tab: ' + e);
             }
         }
+
         showToast(message) {
             if (!this.elements.toast) {
-                this.elements.toast = document.createElement('div');
-                this.elements.toast.id = 'hrt-toast';
-                this.elements.toast.style.cssText = `
+                const toast = document.createElement('div');
+                toast.id = 'hrt-toast';
+                toast.style.cssText = `
                     position: fixed;
-                    top: 20px;
-                    right: 20px;
-                    padding: 10px 16px;
-                    background: #333;
+                    bottom: 20px;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    background: rgba(0, 0, 0, 0.7);
                     color: white;
+                    padding: 10px 16px;
                     border-radius: 4px;
-                    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                    font-size: 14px;
                     z-index: 10000;
                     opacity: 0;
                     transition: opacity 0.3s ease;
                 `;
-                document.body.appendChild(this.elements.toast);
+                document.body.appendChild(toast);
+                this.elements.toast = toast;
             }
 
-            const toast = this.elements.toast;
-            toast.textContent = message;
-            toast.classList.add('show');
+            this.elements.toast.textContent = message;
+            this.elements.toast.style.opacity = '1';
 
             setTimeout(() => {
-                toast.classList.remove('show');
-            }, 2000);
+                this.elements.toast.style.opacity = '0';
+            }, 3000);
         }
-        addEventListeners() {
+
+        updateSectionVisibility(sectionName, sectionElement) {
+            const content = sectionElement.querySelector('.hrt-section-content');
+            const icon = sectionElement.querySelector('.hrt-toggle-icon');
+
+            if (this.state.sections[sectionName]) {
+                content.style.display = 'none';
+                icon.className = 'fa fa-plus hrt-toggle-icon';
+            } else {
+                content.style.display = 'block';
+                icon.className = 'fa fa-minus hrt-toggle-icon';
+            }
+        }
+
+        setupDraggableElement(element, handle = null) {
+            const draggable = handle || element;
+            const self = this;
+
+            draggable.addEventListener('mousedown', function(e) {
+                if (e.button !== 0) return;
+                if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+                self.dragState.isFullScreen = self.state.isFullScreen;
+                if (self.state.isFullScreen) {
+                    self.toggleFullScreen();
+                    setTimeout(() => {
+                        initDrag(e);
+                    }, 100);
+                } else {
+                    initDrag(e);
+                }
+            });
+
+            function initDrag(e) {
+                self.dragState.isDragging = true;
+                self.dragState.element = element;
+                self.dragState.initialX = e.clientX;
+                self.dragState.initialY = e.clientY;
+
+                const style = window.getComputedStyle(element);
+                const top = parseInt(style.top, 10) || 0;
+                const left = parseInt(style.left, 10) || 0;
+                const right = parseInt(style.right, 10) || 0;
+                const bottom = parseInt(style.bottom, 10) || 0;
+
+                if (style.top !== 'auto' && style.left !== 'auto') {
+                    self.dragState.initialTop = top;
+                    self.dragState.initialLeft = left;
+                } else if (style.bottom !== 'auto' && style.right !== 'auto') {
+                    self.dragState.initialTop = window.innerHeight - bottom - element.offsetHeight;
+                    self.dragState.initialLeft = window.innerWidth - right - element.offsetWidth;
+                } else if (style.top !== 'auto' && style.right !== 'auto') {
+                    self.dragState.initialTop = top;
+                    self.dragState.initialLeft = window.innerWidth - right - element.offsetWidth;
+                } else if (style.bottom !== 'auto' && style.left !== 'auto') {
+                    self.dragState.initialTop = window.innerHeight - bottom - element.offsetHeight;
+                    self.dragState.initialLeft = left;
+                }
+            }
+        }
+
+        addGlobalEventListeners() {
+            document.addEventListener('mousemove', (e) => {
+                if (!this.dragState.isDragging) return;
+
+                const element = this.dragState.element;
+                const dx = e.clientX - this.dragState.initialX;
+                const dy = e.clientY - this.dragState.initialY;
+                const newTop = this.dragState.initialTop + dy;
+                const newLeft = this.dragState.initialLeft + dx;
+                const minTop = 0;
+                const minLeft = 0;
+                const maxTop = window.innerHeight - element.offsetHeight;
+                const maxLeft = window.innerWidth - element.offsetWidth;
+
+                element.style.top = Math.max(minTop, Math.min(maxTop, newTop)) + 'px';
+                element.style.left = Math.max(minLeft, Math.min(maxLeft, newLeft)) + 'px';
+                element.style.right = 'auto';
+                element.style.bottom = 'auto';
+            });
+
+            document.addEventListener('mouseup', () => {
+                this.dragState.isDragging = false;
+                this.dragState.element = null;
+            });
+
             window.addEventListener('resize', () => {
-                if (this.elements.floatWindow) {
-                    const floatWindow = this.elements.floatWindow;
-                    const maxTop = window.innerHeight - floatWindow.offsetHeight;
-                    const maxLeft = window.innerWidth - floatWindow.offsetWidth;
+                if (this.state.isFullScreen) return;
 
-                    if (parseInt(floatWindow.style.top) > maxTop) {
-                        floatWindow.style.top = maxTop + "px";
-                    }
+                const floatWindow = this.elements.floatWindow;
+                if (!floatWindow) return;
+                const rect = floatWindow.getBoundingClientRect();
 
-                    if (parseInt(floatWindow.style.left) > maxLeft) {
-                        floatWindow.style.left = maxLeft + "px";
-                    }
+                if (rect.right > window.innerWidth) {
+                    floatWindow.style.left = (window.innerWidth - rect.width) + 'px';
+                }
+
+                if (rect.bottom > window.innerHeight) {
+                    floatWindow.style.top = (window.innerHeight - rect.height) + 'px';
                 }
             });
         }
     }
-    const hrTool = new HRTool();
+
+    GM_addStyle(`
+        .status-success { background: #e8f5e9; color: #2e7d32; }
+        .status-redirect { background: #e8eaf6; color: #1a237e; }
+        .status-client-error { background: #fff3e0; color: #f57c00; }
+        .status-server-error { background: #ffebee; color: #b71c1c; }
+
+        .hrt-hidden { display: none !important; }
+
+        .hrt-method-btn.active {
+            background: #4a90e2;
+            color: white;
+        }
+
+        .hrt-history-item {
+            padding: 8px 12px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .hrt-history-item:hover {
+            background: #f5f5f5;
+        }
+
+        .hrt-history-item.active {
+            background: #e8f5e9;
+        }
+
+        button:hover {
+            filter: brightness(0.95);
+        }
+
+        button:active {
+            transform: translateY(1px);
+        }
+    `);
+
+    new HRTool();
 })();
