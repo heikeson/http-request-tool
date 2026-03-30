@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HTTP Request Tool(HRT)
 // @namespace    https://github.com/heikeson/http-request-tool
-// @version      2.5
+// @version      3.0
 // @description  HTTP request tool with URL auto-detection, cookie management and beautiful UI
 // @author       heikeson
 // @match        *://*/*
@@ -25,6 +25,7 @@
                 cookies: [],
                 body: '{}',
                 useJsonForm: true,
+                timeout: 30000,
                 sections: {
                     form: false,
                     headers: false,
@@ -35,7 +36,8 @@
                 history: [],
                 historyLimit: GM_getValue('historyLimit', 20),
                 currentHistoryId: null,
-                isFullScreen: false
+                isFullScreen: false,
+                currentRequest: null
             };
 
             this.elements = {
@@ -80,7 +82,7 @@
         createToggleButton() {
             const btn = document.createElement('button');
             btn.id = 'hrt-toggle-btn';
-            btn.innerHTML = '<i class="fa fa-bars"></i> HRT';
+            btn.textContent = 'HRT';
             btn.style.cssText = `
                 position: fixed;
                 bottom: 20px;
@@ -102,10 +104,13 @@
                 transition: all 0.2s ease;
             `;
 
-            btn.addEventListener('click', () => {
+            const clickHandler = () => {
+                btn.removeEventListener('click', clickHandler);
                 btn.remove();
                 this.createFloatWindow();
-            });
+            };
+
+            btn.addEventListener('click', clickHandler);
 
             document.body.appendChild(btn);
             this.elements.toggleBtn = btn;
@@ -147,6 +152,7 @@
             document.body.appendChild(floatWindow);
 
             this.elements.floatWindow = floatWindow;
+            this.elements.content = content;
             this.setupDraggableElement(floatWindow, header);
         }
 
@@ -169,7 +175,7 @@
 
             const fullScreenBtn = document.createElement('button');
             fullScreenBtn.id = 'hrt-fullscreen-btn';
-            fullScreenBtn.innerHTML = '<i class="fa fa-expand"></i>';
+            fullScreenBtn.textContent = '⤢';
             fullScreenBtn.style.cssText = `
                 width: 24px;
                 height: 24px;
@@ -189,7 +195,7 @@
 
             const closeBtn = document.createElement('button');
             closeBtn.id = 'hrt-close-btn';
-            closeBtn.innerHTML = '<i class="fa fa-times"></i>';
+            closeBtn.textContent = '×';
             closeBtn.style.cssText = `
                 width: 24px;
                 height: 24px;
@@ -257,7 +263,6 @@
 
             const header = document.createElement('div');
             header.className = 'hrt-section-header';
-            header.innerHTML = '<i class="fa fa-paper-plane hrt-toggle-icon"></i>Request';
             header.style.cssText = `
                 font-weight: 500;
                 margin-bottom: 8px;
@@ -266,6 +271,16 @@
                 align-items: center;
                 cursor: pointer;
             `;
+
+            const icon = document.createElement('span');
+            icon.className = 'hrt-toggle-icon';
+            icon.textContent = '→';
+            icon.style.marginRight = '8px';
+            header.appendChild(icon);
+
+            const title = document.createElement('span');
+            title.textContent = 'Request';
+            header.appendChild(title);
 
             header.addEventListener('click', () => {
                 this.state.sections.form = !this.state.sections.form;
@@ -373,7 +388,7 @@
 
             const addJsonBtn = document.createElement('button');
             addJsonBtn.id = 'hrt-add-json-btn';
-            addJsonBtn.innerHTML = '<i class="fa fa-plus"></i> Add Field';
+            addJsonBtn.textContent = '+ Add Field';
             addJsonBtn.style.cssText = `
                 padding: 6px 12px;
                 background: #50e3c2;
@@ -416,7 +431,7 @@
                         const jsonData = this.collectJsonData();
                         rawJson.value = JSON.stringify(jsonData, null, 2);
                     } catch (e) {
-                        alert('Invalid JSON format');
+                        this.showToast('Invalid JSON format');
                         return;
                     }
 
@@ -425,7 +440,7 @@
                     toggleBtn.textContent = 'Switch to Form';
                 } else {
                     try {
-                        const jsonData = JSON.parse(rawJson.value);
+                        const jsonData = JSON.parse(rawJson.value || '{}');
                         jsonForm.innerHTML = '';
                         Object.keys(jsonData).forEach(key => {
                             const value = jsonData[key];
@@ -433,7 +448,7 @@
                             this.addJsonRow(jsonForm, key, value, type);
                         });
                     } catch (e) {
-                        alert('Invalid JSON format');
+                        this.showToast('Invalid JSON format');
                         this.state.useJsonForm = true;
                         return;
                     }
@@ -471,6 +486,42 @@
             bodySection.appendChild(bodyHeader);
             bodySection.appendChild(bodyContent);
 
+            const timeoutDiv = document.createElement('div');
+            timeoutDiv.style.cssText = `
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                margin-top: 8px;
+            `;
+
+            const timeoutLabel = document.createElement('label');
+            timeoutLabel.textContent = 'Timeout (ms):';
+            timeoutLabel.style.fontSize = '14px';
+
+            const timeoutInput = document.createElement('input');
+            timeoutInput.id = 'hrt-timeout';
+            timeoutInput.type = 'number';
+            timeoutInput.min = '1000';
+            timeoutInput.max = '300000';
+            timeoutInput.value = this.state.timeout;
+            timeoutInput.style.cssText = `
+                padding: 6px 8px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 14px;
+                width: 120px;
+            `;
+
+            timeoutDiv.appendChild(timeoutLabel);
+            timeoutDiv.appendChild(timeoutInput);
+
+            const actionButtons = document.createElement('div');
+            actionButtons.style.cssText = `
+                display: flex;
+                gap: 8px;
+                margin-top: 12px;
+            `;
+
             const sendBtn = document.createElement('button');
             sendBtn.id = 'hrt-send-btn';
             sendBtn.textContent = 'Send Request';
@@ -484,15 +535,37 @@
                 font-size: 16px;
                 font-weight: 500;
                 transition: all 0.2s ease;
-                margin-top: 8px;
+                flex: 1;
+            `;
+
+            const cancelBtn = document.createElement('button');
+            cancelBtn.id = 'hrt-cancel-btn';
+            cancelBtn.textContent = 'Cancel Request';
+            cancelBtn.style.cssText = `
+                padding: 10px 16px;
+                background: #ff6b6b;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 16px;
+                font-weight: 500;
+                transition: all 0.2s ease;
+                flex: 1;
+                display: none;
             `;
 
             sendBtn.addEventListener('click', () => this.sendRequest());
+            cancelBtn.addEventListener('click', () => this.cancelRequest());
+
+            actionButtons.appendChild(sendBtn);
+            actionButtons.appendChild(cancelBtn);
 
             form.appendChild(urlInput);
             form.appendChild(methodsDiv);
             form.appendChild(bodySection);
-            form.appendChild(sendBtn);
+            form.appendChild(timeoutDiv);
+            form.appendChild(actionButtons);
 
             content.appendChild(form);
             section.appendChild(header);
@@ -546,10 +619,17 @@
                 valueInput.value = value;
             } else if (type === 'boolean') {
                 valueInput = document.createElement('select');
-                valueInput.innerHTML = `
-                    <option value="true" ${value === true ? 'selected' : ''}>true</option>
-                    <option value="false" ${value === false ? 'selected' : ''}>false</option>
-                `;
+                const trueOption = document.createElement('option');
+                trueOption.value = 'true';
+                trueOption.textContent = 'true';
+                if (value === true) trueOption.selected = true;
+                valueInput.appendChild(trueOption);
+                
+                const falseOption = document.createElement('option');
+                falseOption.value = 'false';
+                falseOption.textContent = 'false';
+                if (value === false) falseOption.selected = true;
+                valueInput.appendChild(falseOption);
             } else if (type === 'object' || type === 'array') {
                 valueInput = document.createElement('textarea');
                 try {
@@ -560,7 +640,11 @@
                 valueInput.style.height = '60px';
             } else if (type === 'null') {
                 valueInput = document.createElement('select');
-                valueInput.innerHTML = '<option value="null" selected>null</option>';
+                const nullOption = document.createElement('option');
+                nullOption.value = 'null';
+                nullOption.textContent = 'null';
+                nullOption.selected = true;
+                valueInput.appendChild(nullOption);
             }
 
             valueInput.style.cssText = `
@@ -577,7 +661,7 @@
 
             const removeBtn = document.createElement('button');
             removeBtn.className = 'hrt-remove-btn';
-            removeBtn.innerHTML = '<i class="fa fa-times"></i>';
+            removeBtn.textContent = '×';
             removeBtn.style.cssText = `
                 padding: 6px 10px;
                 background: #ff6b6b;
@@ -589,7 +673,8 @@
                 transition: all 0.2s ease;
             `;
 
-            removeBtn.addEventListener('click', () => row.remove());
+            const removeHandler = () => row.remove();
+            removeBtn.addEventListener('click', removeHandler);
 
             row.appendChild(keyInput);
             row.appendChild(typeSelect);
@@ -607,16 +692,25 @@
                     newValueInput.type = 'text';
                 } else if (newType === 'boolean') {
                     newValueInput = document.createElement('select');
-                    newValueInput.innerHTML = `
-                        <option value="true">true</option>
-                        <option value="false">false</option>
-                    `;
+                    const trueOption = document.createElement('option');
+                    trueOption.value = 'true';
+                    trueOption.textContent = 'true';
+                    newValueInput.appendChild(trueOption);
+                    
+                    const falseOption = document.createElement('option');
+                    falseOption.value = 'false';
+                    falseOption.textContent = 'false';
+                    newValueInput.appendChild(falseOption);
                 } else if (newType === 'object' || newType === 'array') {
                     newValueInput = document.createElement('textarea');
                     newValueInput.style.height = '60px';
                 } else if (newType === 'null') {
                     newValueInput = document.createElement('select');
-                    newValueInput.innerHTML = '<option value="null" selected>null</option>';
+                    const nullOption = document.createElement('option');
+                    nullOption.value = 'null';
+                    nullOption.textContent = 'null';
+                    nullOption.selected = true;
+                    newValueInput.appendChild(nullOption);
                 }
 
                 newValueInput.style.cssText = `
@@ -640,7 +734,6 @@
 
             const header = document.createElement('div');
             header.className = 'hrt-section-header';
-            header.innerHTML = '<i class="fa fa-header hrt-toggle-icon"></i>Headers';
             header.style.cssText = `
                 font-weight: 500;
                 margin-bottom: 8px;
@@ -649,6 +742,16 @@
                 align-items: center;
                 cursor: pointer;
             `;
+
+            const icon = document.createElement('span');
+            icon.className = 'hrt-toggle-icon';
+            icon.textContent = '▣';
+            icon.style.marginRight = '8px';
+            header.appendChild(icon);
+
+            const title = document.createElement('span');
+            title.textContent = 'Headers';
+            header.appendChild(title);
 
             header.addEventListener('click', () => {
                 this.state.sections.headers = !this.state.sections.headers;
@@ -673,7 +776,7 @@
 
             const addBtn = document.createElement('button');
             addBtn.id = 'hrt-add-header-btn';
-            addBtn.innerHTML = '<i class="fa fa-plus"></i> Add';
+            addBtn.textContent = '+ Add';
             addBtn.style.cssText = `
                 padding: 6px 12px;
                 background: #50e3c2;
@@ -701,7 +804,6 @@
 
             const header = document.createElement('div');
             header.className = 'hrt-section-header';
-            header.innerHTML = '<i class="fa fa-cookie hrt-toggle-icon"></i>Cookies';
             header.style.cssText = `
                 font-weight: 500;
                 margin-bottom: 8px;
@@ -710,6 +812,16 @@
                 align-items: center;
                 cursor: pointer;
             `;
+
+            const icon = document.createElement('span');
+            icon.className = 'hrt-toggle-icon';
+            icon.textContent = '🍪';
+            icon.style.marginRight = '8px';
+            header.appendChild(icon);
+
+            const title = document.createElement('span');
+            title.textContent = 'Cookies';
+            header.appendChild(title);
 
             header.addEventListener('click', () => {
                 this.state.sections.cookies = !this.state.sections.cookies;
@@ -734,7 +846,7 @@
 
             const loadCookiesBtn = document.createElement('button');
             loadCookiesBtn.id = 'hrt-load-cookies-btn';
-            loadCookiesBtn.innerHTML = '<i class="fa fa-refresh"></i> Load Current Site Cookies';
+            loadCookiesBtn.textContent = '↻ Load Current Site Cookies';
             loadCookiesBtn.style.cssText = `
                 padding: 6px 12px;
                 background: #4a90e2;
@@ -751,7 +863,7 @@
 
             const addBtn = document.createElement('button');
             addBtn.id = 'hrt-add-cookie-btn';
-            addBtn.innerHTML = '<i class="fa fa-plus"></i> Add';
+            addBtn.textContent = '+ Add';
             addBtn.style.cssText = `
                 padding: 6px 12px;
                 background: #50e3c2;
@@ -808,7 +920,6 @@
 
             const header = document.createElement('div');
             header.className = 'hrt-section-header';
-            header.innerHTML = '<i class="fa fa-reply hrt-toggle-icon"></i>Response';
             header.style.cssText = `
                 font-weight: 500;
                 margin-bottom: 8px;
@@ -817,6 +928,16 @@
                 align-items: center;
                 cursor: pointer;
             `;
+
+            const icon = document.createElement('span');
+            icon.className = 'hrt-toggle-icon';
+            icon.textContent = '←';
+            icon.style.marginRight = '8px';
+            header.appendChild(icon);
+
+            const title = document.createElement('span');
+            title.textContent = 'Response';
+            header.appendChild(title);
 
             header.addEventListener('click', () => {
                 this.state.sections.result = !this.state.sections.result;
@@ -878,7 +999,7 @@
 
             const copyBtn = document.createElement('button');
             copyBtn.id = 'hrt-copy-btn';
-            copyBtn.innerHTML = '<i class="fa fa-copy"></i> Copy';
+            copyBtn.textContent = '📋 Copy';
             copyBtn.style.cssText = `
                 padding: 4px 8px;
                 background: #f0f0f0;
@@ -891,7 +1012,7 @@
 
             const openBtn = document.createElement('button');
             openBtn.id = 'hrt-open-btn';
-            openBtn.innerHTML = '<i class="fa fa-external-link"></i> Open in New Tab';
+            openBtn.textContent = '🔗 Open in New Tab';
             openBtn.style.cssText = `
                 padding: 4px 8px;
                 background: #f0f0f0;
@@ -909,12 +1030,77 @@
             resultHeader.appendChild(statusText);
             resultHeader.appendChild(actions);
 
+            const responseTabs = document.createElement('div');
+            responseTabs.style.cssText = `
+                display: flex;
+                gap: 4px;
+                margin-bottom: 8px;
+                border-bottom: 1px solid #eee;
+                padding-bottom: 8px;
+            `;
+
+            const bodyTab = document.createElement('button');
+            bodyTab.id = 'hrt-body-tab';
+            bodyTab.textContent = 'Body';
+            bodyTab.style.cssText = `
+                padding: 4px 12px;
+                background: #4a90e2;
+                color: white;
+                border: none;
+                border-radius: 4px 4px 0 0;
+                cursor: pointer;
+                font-size: 12px;
+                transition: all 0.2s ease;
+            `;
+
+            const headersTab = document.createElement('button');
+            headersTab.id = 'hrt-headers-tab';
+            headersTab.textContent = 'Headers';
+            headersTab.style.cssText = `
+                padding: 4px 12px;
+                background: #f0f0f0;
+                color: #333;
+                border: none;
+                border-radius: 4px 4px 0 0;
+                cursor: pointer;
+                font-size: 12px;
+                transition: all 0.2s ease;
+            `;
+
+            responseTabs.appendChild(bodyTab);
+            responseTabs.appendChild(headersTab);
+
             const resultBody = document.createElement('div');
             resultBody.id = 'hrt-result-body';
             resultBody.textContent = 'Ready to send request...';
 
+            const resultHeaders = document.createElement('div');
+            resultHeaders.id = 'hrt-result-headers';
+            resultHeaders.textContent = 'Response headers will be displayed here';
+            resultHeaders.style.display = 'none';
+
             resultContainer.appendChild(resultHeader);
+            resultContainer.appendChild(responseTabs);
             resultContainer.appendChild(resultBody);
+            resultContainer.appendChild(resultHeaders);
+
+            bodyTab.addEventListener('click', () => {
+                bodyTab.style.background = '#4a90e2';
+                bodyTab.style.color = 'white';
+                headersTab.style.background = '#f0f0f0';
+                headersTab.style.color = '#333';
+                resultBody.style.display = 'block';
+                resultHeaders.style.display = 'none';
+            });
+
+            headersTab.addEventListener('click', () => {
+                headersTab.style.background = '#4a90e2';
+                headersTab.style.color = 'white';
+                bodyTab.style.background = '#f0f0f0';
+                bodyTab.style.color = '#333';
+                resultHeaders.style.display = 'block';
+                resultBody.style.display = 'none';
+            });
 
             copyBtn.addEventListener('click', () => this.copyResponseToClipboard(resultBody.textContent));
             openBtn.addEventListener('click', () => this.openResponseInNewTab(resultBody.textContent));
@@ -932,7 +1118,6 @@
 
             const header = document.createElement('div');
             header.className = 'hrt-section-header';
-            header.innerHTML = '<i class="fa fa-history hrt-toggle-icon"></i>History';
             header.style.cssText = `
                 font-weight: 500;
                 margin-bottom: 8px;
@@ -941,6 +1126,16 @@
                 align-items: center;
                 cursor: pointer;
             `;
+
+            const icon = document.createElement('span');
+            icon.className = 'hrt-toggle-icon';
+            icon.textContent = '⏰';
+            icon.style.marginRight = '8px';
+            header.appendChild(icon);
+
+            const title = document.createElement('span');
+            title.textContent = 'History';
+            header.appendChild(title);
 
             header.addEventListener('click', () => {
                 this.state.sections.history = !this.state.sections.history;
@@ -991,7 +1186,7 @@
 
             const clearHistoryBtn = document.createElement('button');
             clearHistoryBtn.id = 'hrt-clear-history-btn';
-            clearHistoryBtn.innerHTML = '<i class="fa fa-trash"></i> Clear History';
+            clearHistoryBtn.textContent = '🗑️ Clear History';
             clearHistoryBtn.style.cssText = `
                 padding: 4px 12px;
                 background: #ff6b6b;
@@ -1250,7 +1445,7 @@
 
             const removeBtn = document.createElement('button');
             removeBtn.className = 'hrt-remove-btn';
-            removeBtn.innerHTML = '<i class="fa fa-times"></i>';
+            removeBtn.textContent = '×';
             removeBtn.style.cssText = `
                 padding: 6px 10px;
                 background: #ff6b6b;
@@ -1262,7 +1457,8 @@
                 transition: all 0.2s ease;
             `;
 
-            removeBtn.addEventListener('click', () => row.remove());
+            const removeHandler = () => row.remove();
+            removeBtn.addEventListener('click', removeHandler);
 
             row.appendChild(keyInput);
             row.appendChild(valueInput);
@@ -1330,6 +1526,34 @@
 
             this.state.url = url;
 
+            this.updateTimeout();
+            const headers = this.collectHeaders();
+            const cookies = this.collectCookies();
+            const body = this.collectRequestBody();
+
+            if (body.error) {
+                this.showToast(body.error);
+                return;
+            }
+
+            this.state.body = body.data;
+
+            const requestConfig = this.buildRequestConfig(url, headers, cookies, body.data);
+
+            this.updateUIForRequest();
+
+            this.state.currentRequest = GM_xmlhttpRequest(requestConfig);
+        }
+
+        updateTimeout() {
+            const timeoutInput = document.getElementById('hrt-timeout');
+            const timeout = parseInt(timeoutInput.value);
+            if (!isNaN(timeout) && timeout >= 1000 && timeout <= 300000) {
+                this.state.timeout = timeout;
+            }
+        }
+
+        collectHeaders() {
             const headers = [];
             const headerRows = document.querySelectorAll('#hrt-headers-container .hrt-key-value-pair');
             headerRows.forEach(row => {
@@ -1340,7 +1564,10 @@
                 }
             });
             this.state.headers = headers;
+            return headers;
+        }
 
+        collectCookies() {
             const cookies = [];
             const cookieRows = document.querySelectorAll('#hrt-cookies-container .hrt-key-value-pair');
             cookieRows.forEach(row => {
@@ -1351,29 +1578,27 @@
                 }
             });
             this.state.cookies = cookies;
+            return cookies;
+        }
 
+        collectRequestBody() {
             let body = '';
             if (this.state.method === 'POST' || this.state.method === 'PUT' || this.state.method === 'PATCH') {
                 if (this.state.useJsonForm) {
                     try {
                         body = JSON.stringify(this.collectJsonData());
                     } catch (e) {
-                        this.showToast('Invalid JSON format');
-                        return;
+                        return { error: 'Invalid JSON format' };
                     }
                 } else {
                     body = document.getElementById('hrt-raw-json').value;
-                    try {
-                        JSON.parse(body); 
-                    } catch (e) {
-
-                    }
                 }
             }
+            return { data: body };
+        }
 
-            this.state.body = body;
-
-            const requestConfig = {
+        buildRequestConfig(url, headers, cookies, body) {
+            const config = {
                 method: this.state.method,
                 url: url,
                 headers: headers.reduce((obj, header) => {
@@ -1381,6 +1606,7 @@
                     return obj;
                 }, {}),
                 data: body,
+                timeout: this.state.timeout,
                 onload: (response) => {
                     this.handleResponse(response);
                 },
@@ -1393,9 +1619,13 @@
             };
 
             if (cookies.length > 0) {
-                requestConfig.headers['Cookie'] = cookies.map(c => `${c.key}=${c.value}`).join('; ');
+                config.headers['Cookie'] = cookies.map(c => `${c.key}=${c.value}`).join('; ');
             }
 
+            return config;
+        }
+
+        updateUIForRequest() {
             const statusCode = document.getElementById('hrt-status-code');
             const statusText = document.getElementById('hrt-status-text');
             const resultBody = document.getElementById('hrt-result-body');
@@ -1410,15 +1640,42 @@
             this.state.sections.result = false;
             this.updateSectionVisibility('result', document.querySelector('[data-section="result"]'));
 
-            GM_xmlhttpRequest(requestConfig);
+            document.getElementById('hrt-send-btn').style.display = 'none';
+            document.getElementById('hrt-cancel-btn').style.display = 'block';
+        }
+
+        cancelRequest() {
+            if (this.state.currentRequest) {
+                this.state.currentRequest.abort();
+                this.state.currentRequest = null;
+                
+                const statusCode = document.getElementById('hrt-status-code');
+                const statusText = document.getElementById('hrt-status-text');
+                const resultBody = document.getElementById('hrt-result-body');
+                
+                statusCode.textContent = 'Cancelled';
+                statusCode.className = 'status-client-error';
+                statusCode.style.backgroundColor = '#fff3e0';
+                statusCode.style.color = '#f57c00';
+                statusText.textContent = 'Request cancelled by user';
+                resultBody.textContent = 'Request was cancelled';
+                
+                document.getElementById('hrt-send-btn').style.display = 'block';
+                document.getElementById('hrt-cancel-btn').style.display = 'none';
+                
+                this.showToast('Request cancelled');
+            }
         }
 
         handleResponse(response) {
+            document.getElementById('hrt-send-btn').style.display = 'block';
+            document.getElementById('hrt-cancel-btn').style.display = 'none';
+            
             const statusCode = document.getElementById('hrt-status-code');
             const statusText = document.getElementById('hrt-status-text');
             const resultBody = document.getElementById('hrt-result-body');
 
-            statusCode.textContent = response.status;
+            statusCode.textContent = response.status || (response.error ? 'Error' : 'Unknown');
             statusText.textContent = response.statusText || (response.error ? response.error : 'Unknown error');
 
             if (response.status >= 200 && response.status < 300) {
@@ -1440,39 +1697,52 @@
             }
 
             try {
-                const jsonData = JSON.parse(response.responseText);
+                const jsonData = JSON.parse(response.responseText || '');
                 resultBody.textContent = JSON.stringify(jsonData, null, 2);
             } catch (e) {
                 resultBody.textContent = response.responseText || 'No response body';
             }
 
+            const resultHeaders = document.getElementById('hrt-result-headers');
+            if (response.responseHeaders) {
+                resultHeaders.textContent = response.responseHeaders;
+            } else {
+                resultHeaders.textContent = 'No response headers';
+            }
+
             window.httpRequestResponse = response.responseText;
 
-            const historyItem = {
-                id: Date.now().toString(),
-                timestamp: Date.now(),
-                method: this.state.method,
-                url: this.state.url,
-                status: response.status,
-                statusText: response.statusText,
-                request: {
-                    headers: this.state.headers,
-                    cookies: this.state.cookies,
-                    body: this.state.body
-                },
-                response: {
-                    headers: response.responseHeaders,
-                    body: response.responseText
-                }
-            };
+            if (response.status) {
+                const historyItem = {
+                    id: Date.now().toString(),
+                    timestamp: Date.now(),
+                    method: this.state.method,
+                    url: this.state.url,
+                    status: response.status,
+                    statusText: response.statusText,
+                    request: {
+                        headers: this.state.headers,
+                        cookies: this.state.cookies,
+                        body: this.state.body
+                    },
+                    response: {
+                        headers: response.responseHeaders,
+                        body: response.responseText
+                    }
+                };
 
-            this.state.history.push(historyItem);
-            this.state.currentHistoryId = historyItem.id;
-            this.trimHistory();
-            this.saveSettings();
-            this.renderHistory(document.getElementById('hrt-history-list'));
+                this.state.history.push(historyItem);
+                this.state.currentHistoryId = historyItem.id;
+                this.trimHistory();
+                this.saveSettings();
+                this.renderHistory(document.getElementById('hrt-history-list'));
 
-            this.showToast(`Request completed with status ${response.status}`);
+                this.showToast(`Request completed with status ${response.status}`);
+            } else {
+                this.showToast('Request failed: ' + (response.error || 'Unknown error'));
+            }
+            
+            this.state.currentRequest = null;
         }
 
         copyResponseToClipboard(text) {
@@ -1540,7 +1810,7 @@
             const draggable = handle || element;
             const self = this;
 
-            draggable.addEventListener('mousedown', function(e) {
+            const mouseDownHandler = function(e) {
                 if (e.button !== 0) return;
                 if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
                 self.dragState.isFullScreen = self.state.isFullScreen;
@@ -1552,7 +1822,9 @@
                 } else {
                     initDrag(e);
                 }
-            });
+            };
+
+            draggable.addEventListener('mousedown', mouseDownHandler);
 
             function initDrag(e) {
                 self.dragState.isDragging = true;

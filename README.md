@@ -3,10 +3,17 @@
 ## Overview
 The HTTP Request Tool is a userscript designed to facilitate HTTP requests directly from the browser. It features URL auto - detection, cookie management, and a beautiful user interface. This tool is open - source and available on [GitHub](https://github.com/heikeson/http-request-tool).
 
-### Features
+### Version 3.0 Features
 - **URL Auto - Detection**: Automatically detects the current page URL, saving you time when making requests.
 - **Cookie Management**: Manages cookies to ensure seamless communication with servers.
 - **Beautiful UI**: Provides an intuitive and visually appealing interface for easy interaction.
+- **Timeout Setting**: Allows setting request timeout from 1000ms to 300000ms.
+- **Request Cancellation**: Enables cancelling ongoing requests to save resources.
+- **Response Headers Display**: Shows detailed response headers in a separate tab.
+- **Enhanced Security**: Removed XSS vulnerabilities and improved error handling.
+- **Performance Optimization**: Optimized code structure and reduced memory leaks.
+
+
 
 ## Installation
 
@@ -30,9 +37,16 @@ Click on the "HTTP Request Tool" button that appears at the bottom - right corne
 - **Method**: Select the HTTP method (GET, POST, PUT, DELETE, etc.) by clicking on the corresponding button.
 - **Headers**: Add or remove custom headers using the "Add" and "Remove" buttons. Each header consists of a key - value pair.
 - **Body**: If your request requires a body, you can enter it in the "Body" section. The tool supports JSON formatting.
+- **Timeout**: Set the request timeout in milliseconds (1000-300000ms) to control how long the tool waits for a response.
 
 ### Sending the Request
 Once you have configured the request, click the "Send" button. The tool will display the response status code and the response body in the result section.
+
+### Cancelling a Request
+While a request is in progress, you can click the "Cancel" button to stop the request and save resources.
+
+### Viewing Response Headers
+After receiving a response, you can switch to the "Headers" tab to view detailed response headers in a structured format.
 
 ## Contribution
 
@@ -40,12 +54,12 @@ Once you have configured the request, click the "Send" button. The tool will dis
 We welcome contributions from the open - source community. Here's how you can contribute:
 
 1. **Fork the Repository**: Click the "Fork" button on the GitHub repository page to create your own copy of the project.
-2. **Clone the Repository**: Clone your forked repository to your local machine using `git clone <repository - url>`.
-3. **Create a New Branch**: Create a new branch for your feature or bug fix using `git checkout -b <branch - name>`.
+2. **Clone the Repository**: Clone your forked repository to your local machine using `git clone https://github.com/heikeson/http-request-tool.git`.
+3. **Create a New Branch**: Create a new branch for your feature or bug fix using `git checkout -b main`.
 4. **Make Changes**: Make your changes to the codebase.
 5. **Test Your Changes**: Ensure that your changes do not break the existing functionality.
 6. **Commit Your Changes**: Commit your changes using `git commit -m "<commit - message>"`.
-7. **Push Your Changes**: Push your changes to your forked repository using `git push origin <branch - name>`.
+7. **Push Your Changes**: Push your changes to your forked repository using `git push origin main`.
 8. **Create a Pull Request**: Go to the original repository on GitHub and click the "New Pull Request" button. Select your branch and submit the pull request.
 
 ### Code Style
